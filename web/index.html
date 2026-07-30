@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>PortDeck · 本地服务控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" aria-label="PortDeck 首页">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span><strong>PortDeck</strong><small>LOCAL CONTROL</small></span>
+        </a>
+
+        <nav class="nav" aria-label="服务筛选">
+          <p class="nav-label">服务</p>
+          <button class="nav-item active" data-filter="all">
+            <span class="nav-icon">⌘</span><span>全部服务</span><span class="nav-count" data-count="total">0</span>
+          </button>
+          <button class="nav-item" data-filter="running">
+            <span class="nav-icon status-running">●</span><span>正在运行</span><span class="nav-count" data-count="running">0</span>
+          </button>
+          <button class="nav-item" data-filter="managed">
+            <span class="nav-icon">◆</span><span>受管服务</span><span class="nav-count" data-count="managed">0</span>
+          </button>
+          <button class="nav-item" data-filter="discovered">
+            <span class="nav-icon">◇</span><span>自动发现</span><span class="nav-count" data-count="discovered">0</span>
+          </button>
+          <button class="nav-item" data-filter="offline">
+            <span class="nav-icon status-offline">●</span><span>已离线</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-card">
+          <div class="radar"><span></span><span></span><i></i></div>
+          <div><strong>实时扫描已开启</strong><small>每 5 秒检查监听端口</small></div>
+        </div>
+
+        <div class="sidebar-footer">
+          <span class="local-dot"></span>
+          <span>仅限本机访问</span>
+          <code>127.0.0.1</code>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">OVERVIEW</p>
+            <h1>本地服务</h1>
+          </div>
+          <div class="topbar-actions">
+            <label class="search">
+              <span>⌕</span>
+              <input id="searchInput" type="search" placeholder="搜索名称、端口或命令" autocomplete="off" />
+              <kbd>⌘ K</kbd>
+            </label>
+            <button class="icon-button" id="refreshButton" title="立即扫描" aria-label="立即扫描">↻</button>
+            <button class="primary-button" id="addButton"><span>＋</span> 添加服务</button>
+          </div>
+        </header>
+
+        <section class="summary-grid" aria-label="服务概览">
+          <article class="summary-card accent-green">
+            <div class="summary-icon">●</div>
+            <div><span>正在运行</span><strong id="runningMetric">0</strong></div>
+            <small>个服务在线</small>
+          </article>
+          <article class="summary-card accent-violet">
+            <div class="summary-icon">◆</div>
+            <div><span>受管服务</span><strong id="managedMetric">0</strong></div>
+            <small>可一键启停</small>
+          </article>
+          <article class="summary-card accent-cyan">
+            <div class="summary-icon">◇</div>
+            <div><span>新发现</span><strong id="discoveredMetric">0</strong></div>
+            <small>等待纳入管理</small>
+          </article>
+          <article class="summary-card accent-amber">
+            <div class="summary-icon">!</div>
+            <div><span>端口冲突</span><strong id="conflictMetric">0</strong></div>
+            <small>需要处理</small>
+          </article>
+        </section>
+
+        <section class="service-section">
+          <div class="section-heading">
+            <div>
+              <h2 id="sectionTitle">全部服务</h2>
+              <p id="scanStatus">正在读取本机监听端口…</p>
+            </div>
+            <div class="view-options">
+              <span class="legend"><i class="status-running"></i>运行中</span>
+              <span class="legend"><i class="status-offline"></i>已离线</span>
+            </div>
+          </div>
+
+          <div class="service-list" id="serviceList" aria-live="polite">
+            <div class="loading-row"><span></span><span></span><span></span></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="serviceDialog" class="dialog">
+      <form id="serviceForm" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow" id="dialogEyebrow">MANAGED SERVICE</p>
+            <h2 id="dialogTitle">添加受管服务</h2>
+          </div>
+          <button type="button" class="close-button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <p class="dialog-intro">保存启动命令后，即使服务停止，它仍会留在控制台里等待下次启动。</p>
+        <input type="hidden" name="id" />
+        <div class="form-grid">
+          <label class="field span-2">
+            <span>服务名称</span>
+            <input name="name" required maxlength="120" placeholder="例如：Vibe Trading" />
+          </label>
+          <label class="field">
+            <span>首选端口</span>
+            <input name="preferredPort" type="number" min="1" max="65535" placeholder="8899" />
+          </label>
+          <label class="field">
+            <span>服务类型</span>
+            <input name="kind" placeholder="Node.js / Python / Docker" />
+          </label>
+          <label class="field span-2">
+            <span>工作目录</span>
+            <input name="cwd" placeholder="/path/to/project" />
+          </label>
+          <label class="field span-2">
+            <span>启动命令 <em>必填</em></span>
+            <textarea name="startCommand" required rows="2" placeholder="npm run dev"></textarea>
+          </label>
+          <label class="field span-2">
+            <span>停止命令 <small>可选，不填则发送 SIGTERM</small></span>
+            <textarea name="stopCommand" rows="2" placeholder="docker compose down"></textarea>
+          </label>
+          <label class="field">
+            <span>健康检查路径</span>
+            <input name="healthPath" value="/" placeholder="/health" />
+          </label>
+          <label class="field">
+            <span>备注</span>
+            <input name="notes" placeholder="可选说明" />
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="secondary-button" data-close-dialog>取消</button>
+          <button type="submit" class="primary-button">保存服务</button>
+        </div>
+      </form>
+    </dialog>
+
+    <aside class="log-drawer" id="logDrawer" aria-hidden="true">
+      <div class="drawer-header">
+        <div><p class="eyebrow">LIVE OUTPUT</p><h2 id="logTitle">运行日志</h2></div>
+        <button class="close-button" id="closeLogButton" aria-label="关闭日志">×</button>
+      </div>
+      <pre id="logContent">暂无日志</pre>
+    </aside>
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

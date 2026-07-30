@@ -1,0 +1,69 @@
+{
+  "name": "portdeck",
+  "version": "0.2.0",
+  "private": true,
+  "author": "PortDeck",
+  "description": "A local-first dashboard for discovering and managing development services.",
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "scripts": {
+    "dev": "node --watch server/index.mjs",
+    "start": "node server/index.mjs",
+    "test": "node --test",
+    "desktop:dev": "electron .",
+    "desktop:pack": "electron-builder --dir --mac",
+    "desktop:build": "electron-builder --mac",
+    "desktop:build:arm64": "electron-builder --mac --arm64"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "build": {
+    "appId": "io.portdeck.app",
+    "productName": "PortDeck",
+    "asar": false,
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "desktop/resources"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "web/**/*",
+      "package.json",
+      "!**/._*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true
+    },
+    "dmg": {
+      "title": "PortDeck ${version}",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 190
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  }
+}
