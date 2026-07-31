@@ -7,6 +7,8 @@ import { ServiceInspector } from "./services/inspector.mjs";
 import { ProcessManager } from "./services/process-manager.mjs";
 import { ServiceRegistry } from "./services/registry.mjs";
 import { scanListeningServices } from "./services/scanner.mjs";
+import { previewCommandRisk, riskForServiceAction } from "./services/risk.mjs";
+import { listServiceTemplates } from "./services/templates.mjs";
 import {
   hasTrustedOrigin,
   isLocalRequest,
@@ -67,7 +69,7 @@ export async function startPortDeckServer({
   port = 4399,
   dataRoot = path.join(ROOT, "data"),
   webRoot = DEFAULT_WEB_ROOT,
-  version = "1.1.0",
+  version = "1.5.0",
   allowPortFallback = false,
   scanner = scanListeningServices,
   logger = console,
@@ -153,6 +155,80 @@ export async function startPortDeckServer({
     return inspector.decorate(catalog, { fresh });
   }
 
+  async function executeServiceAction(current, action) {
+    const id = current.id;
+    if (action === "start") {
+      if (current.source !== "managed") throw Object.assign(new Error("请先将发现的服务设为受管服务"), { statusCode: 400 });
+      if (current.status === "running") throw Object.assign(new Error("服务已经在运行"), { statusCode: 409 });
+      if (current.status === "conflict") {
+        throw Object.assign(new Error(`端口 ${current.port} 已被 PID ${current.conflict.pid} 占用`), {
+          statusCode: 409,
+          details: current.conflict,
+        });
+      }
+      const result = await processManager.start(current);
+      const service = await registry.upsert({
+        ...current,
+        lastPid: result.pid,
+        processIdentity: result.processIdentity,
+        desiredState: "running",
+        lastSeenAt: new Date().toISOString(),
+      }, id);
+      scanCache.at = 0;
+      inspector.clear(id);
+      return { ok: true, service, ...result };
+    }
+
+    if (action === "stop") {
+      const result = current.source === "managed"
+        ? await processManager.stop(current, current.pid, current.processIdentity)
+        : await processManager.stopDiscovered(current.pid, current.processIdentity);
+      if (current.source === "managed") {
+        await registry.upsert({
+          ...current,
+          lastPid: null,
+          processIdentity: null,
+          desiredState: "stopped",
+          lastSeenAt: new Date().toISOString(),
+        }, id);
+      }
+      scanCache.at = 0;
+      inspector.clear(id);
+      return { ok: true, ...result };
+    }
+
+    if (action === "restart") {
+      if (current.source !== "managed") throw Object.assign(new Error("只有受管服务可以重启"), { statusCode: 400 });
+      const result = await processManager.restart(
+        current,
+        current.status === "running" ? current.pid : null,
+        current.processIdentity,
+      );
+      const service = await registry.upsert({
+        ...current,
+        lastPid: result.pid,
+        processIdentity: result.processIdentity,
+        desiredState: "running",
+        lastSeenAt: new Date().toISOString(),
+      }, id);
+      scanCache.at = 0;
+      inspector.clear(id);
+      return { ok: true, service, ...result };
+    }
+    throw Object.assign(new Error("不支持的服务操作"), { statusCode: 400 });
+  }
+
+  async function recordAction(current, action, outcome, message = "", source = "web") {
+    await registry.recordAudit({
+      action,
+      serviceId: current?.id,
+      serviceName: current?.name,
+      outcome,
+      message,
+      source,
+    }).catch((error) => logger.error("Unable to write audit record:", error));
+  }
+
   async function streamLogs(request, response, serviceId) {
     if (!registry.find(serviceId)) return sendError(response, 404, "只有受管服务有运行日志");
     response.writeHead(200, {
@@ -211,12 +287,95 @@ export async function startPortDeckServer({
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/api/capabilities") {
+      return sendJson(response, 200, {
+        version: 1,
+        capabilities: [
+          "service-discovery",
+          "health-checks",
+          "process-management",
+          "log-streaming",
+          "configuration-storage",
+          "system-notifications",
+          "login-launch",
+          "workspaces",
+          "audit-history",
+          "risk-preview",
+          "configuration-import-export",
+        ],
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/templates") {
+      return sendJson(response, 200, { templates: listServiceTemplates() });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/risk/preview") {
+      const body = await readJson(request);
+      return sendJson(response, 200, { risk: previewCommandRisk(body.command, { action: body.action }) });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/settings") {
+      return sendJson(response, 200, {
+        preferences: registry.getPreferences(),
+        workspaces: registry.listWorkspaces(),
+      });
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/settings") {
+      const preferences = await registry.updatePreferences(await readJson(request));
+      await registry.recordAudit({ action: "settings-update", outcome: "success", source: "web" });
+      return sendJson(response, 200, { preferences, workspaces: registry.listWorkspaces() });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/audit") {
+      return sendJson(response, 200, { entries: registry.listAudit({ limit: url.searchParams.get("limit") }) });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/workspaces") {
+      return sendJson(response, 200, { workspaces: registry.listWorkspaces() });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/workspaces") {
+      const workspace = await registry.upsertWorkspace(await readJson(request));
+      await registry.recordAudit({ action: "workspace-create", outcome: "success", message: workspace.name, source: "web" });
+      return sendJson(response, 201, { workspace });
+    }
+
+    const workspaceMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+    if (workspaceMatch && request.method === "PUT") {
+      const id = decodeURIComponent(workspaceMatch[1]);
+      const workspace = await registry.upsertWorkspace(await readJson(request), id);
+      return sendJson(response, 200, { workspace });
+    }
+
+    if (workspaceMatch && request.method === "DELETE") {
+      const id = decodeURIComponent(workspaceMatch[1]);
+      const removed = await registry.removeWorkspace(id);
+      if (!removed) return sendError(response, 400, "默认工作区不能删除，或工作区不存在");
+      return sendJson(response, 200, { ok: true });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/system/export") {
+      return sendJson(response, 200, registry.exportSnapshot());
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/system/import") {
+      const body = await readJson(request);
+      const result = await registry.importSnapshot(body.snapshot, { mode: body.mode === "replace" ? "replace" : "merge" });
+      await registry.recordAudit({ action: "config-import", outcome: "success", message: result.mode, source: "web" });
+      scanCache.at = 0;
+      return sendJson(response, 200, { ok: true, ...result });
+    }
+
     if (request.method === "GET" && url.pathname === "/api/services") {
       const services = await getCatalog({ fresh: url.searchParams.get("fresh") === "1" });
       return sendJson(response, 200, {
         services,
         summary: summarize(services),
         scannedAt: new Date(scanCache.at).toISOString(),
+        preferences: registry.getPreferences(),
+        workspaces: registry.listWorkspaces(),
       });
     }
 
@@ -271,15 +430,57 @@ export async function startPortDeckServer({
       });
     }
 
+    if (request.method === "POST" && url.pathname === "/api/services/bulk") {
+      const body = await readJson(request);
+      const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String) : [])].slice(0, 50);
+      const action = ["start", "stop", "restart"].includes(body.action) ? body.action : null;
+      if (!ids.length || !action) return sendError(response, 400, "请选择服务和批量操作");
+      const catalog = await getCatalog({ fresh: true });
+      const targets = ids.map((id) => catalog.find((service) => service.id === id)).filter(Boolean);
+      const risks = targets.map((service) => ({ serviceId: service.id, serviceName: service.name, ...riskForServiceAction(service, action) }));
+      if (risks.some((risk) => risk.requiresAcknowledgement) && body.riskAcknowledged !== true) {
+        await Promise.all(targets.map((service) => recordAction(
+          service,
+          `bulk-${action}`,
+          "blocked",
+          "等待用户确认命令风险",
+          body.source || "web",
+        )));
+        return sendError(response, 428, "批量操作包含需要确认的命令", { risks });
+      }
+      const results = [];
+      for (const service of targets) {
+        try {
+          const result = await executeServiceAction(service, action);
+          await recordAction(service, `bulk-${action}`, "success", "", body.source || "web");
+          results.push({ serviceId: service.id, ok: true, result });
+        } catch (error) {
+          await recordAction(service, `bulk-${action}`, "failure", error.message, body.source || "web");
+          results.push({ serviceId: service.id, ok: false, error: error.message, statusCode: error.statusCode || 500 });
+        }
+      }
+      return sendJson(response, 207, { ok: results.every((item) => item.ok), results });
+    }
+
     const logStreamMatch = url.pathname.match(/^\/api\/services\/([^/]+)\/logs\/stream$/);
     if (logStreamMatch && request.method === "GET") {
       return streamLogs(request, response, decodeURIComponent(logStreamMatch[1]));
+    }
+
+    const riskMatch = url.pathname.match(/^\/api\/services\/([^/]+)\/risk\/(start|stop|restart)$/);
+    if (riskMatch && request.method === "GET") {
+      const id = decodeURIComponent(riskMatch[1]);
+      const catalog = await getCatalog({ fresh: true });
+      const current = catalog.find((item) => item.id === id);
+      if (!current) return sendError(response, 404, "服务不存在或已经停止");
+      return sendJson(response, 200, { risk: riskForServiceAction(current, riskMatch[2]) });
     }
 
     if (request.method === "POST" && url.pathname === "/api/services") {
       const body = await readJson(request);
       if (!body.startCommand) return sendError(response, 400, "启动命令不能为空");
       const service = await registry.upsert(body);
+      await recordAction(service, "service-create", "success");
       scanCache.at = 0;
       return sendJson(response, 201, { service });
     }
@@ -289,14 +490,17 @@ export async function startPortDeckServer({
       const id = decodeURIComponent(serviceMatch[1]);
       if (!registry.find(id)) return sendError(response, 404, "服务不存在");
       const service = await registry.upsert(await readJson(request), id);
+      await recordAction(service, "service-update", "success");
       scanCache.at = 0;
       return sendJson(response, 200, { service });
     }
 
     if (serviceMatch && request.method === "DELETE") {
       const id = decodeURIComponent(serviceMatch[1]);
+      const current = registry.find(id);
       const removed = await registry.remove(id);
       if (!removed) return sendError(response, 404, "服务不存在");
+      await recordAction(current, "service-remove", "success");
       scanCache.at = 0;
       return sendJson(response, 200, { ok: true });
     }
@@ -315,61 +519,19 @@ export async function startPortDeckServer({
       const catalog = await getCatalog({ fresh: true });
       const current = catalog.find((item) => item.id === id) || null;
       if (!current) return sendError(response, 404, "服务不存在或已经停止");
-
-      if (action === "start") {
-        if (current.source !== "managed") return sendError(response, 400, "请先将发现的服务设为受管服务");
-        if (current.status === "running") return sendError(response, 409, "服务已经在运行");
-        if (current.status === "conflict") {
-          return sendError(response, 409, `端口 ${current.port} 已被 PID ${current.conflict.pid} 占用`, current.conflict);
-        }
-        const result = await processManager.start(current);
-        const service = await registry.upsert({
-          ...current,
-          lastPid: result.pid,
-          processIdentity: result.processIdentity,
-          desiredState: "running",
-          lastSeenAt: new Date().toISOString(),
-        }, id);
-        scanCache.at = 0;
-        inspector.clear(id);
-        return sendJson(response, 202, { ok: true, service, ...result });
+      const body = await readJson(request);
+      const risk = riskForServiceAction(current, action);
+      if (risk.requiresAcknowledgement && body.riskAcknowledged !== true) {
+        await recordAction(current, action, "blocked", "等待用户确认命令风险", body.source || "web");
+        return sendError(response, 428, "执行前需要确认风险", { risk });
       }
-
-      if (action === "stop") {
-        const result = current.source === "managed"
-          ? await processManager.stop(current, current.pid, current.processIdentity)
-          : await processManager.stopDiscovered(current.pid, current.processIdentity);
-        if (current.source === "managed") {
-          await registry.upsert({
-            ...current,
-            lastPid: null,
-            processIdentity: null,
-            desiredState: "stopped",
-            lastSeenAt: new Date().toISOString(),
-          }, id);
-        }
-        scanCache.at = 0;
-        inspector.clear(id);
-        return sendJson(response, 202, { ok: true, ...result });
-      }
-
-      if (action === "restart") {
-        if (current.source !== "managed") return sendError(response, 400, "只有受管服务可以重启");
-        const result = await processManager.restart(
-          current,
-          current.status === "running" ? current.pid : null,
-          current.processIdentity,
-        );
-        const service = await registry.upsert({
-          ...current,
-          lastPid: result.pid,
-          processIdentity: result.processIdentity,
-          desiredState: "running",
-          lastSeenAt: new Date().toISOString(),
-        }, id);
-        scanCache.at = 0;
-        inspector.clear(id);
-        return sendJson(response, 202, { ok: true, service, ...result });
+      try {
+        const result = await executeServiceAction(current, action);
+        await recordAction(current, action, "success", "", body.source || "web");
+        return sendJson(response, 202, result);
+      } catch (error) {
+        await recordAction(current, action, "failure", error.message, body.source || "web");
+        throw error;
       }
     }
 

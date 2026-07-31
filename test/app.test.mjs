@@ -59,7 +59,30 @@ test("startPortDeckServer can be embedded on a dynamic port", async (t) => {
   const diagnostics = await fetch(`${instance.url}/api/system/diagnostics`)
     .then((response) => response.json());
   assert.equal(diagnostics.application.version, "1.0.0-test");
-  assert.equal(diagnostics.registry.schemaVersion, 3);
+  assert.equal(diagnostics.registry.schemaVersion, 4);
+
+  const capabilities = await fetch(`${instance.url}/api/capabilities`).then((response) => response.json());
+  assert.ok(capabilities.capabilities.includes("risk-preview"));
+  const templates = await fetch(`${instance.url}/api/templates`).then((response) => response.json());
+  assert.equal(templates.templates.length, 4);
+
+  const workspace = await fetch(`${instance.url}/api/workspaces`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Trading" }),
+  }).then((response) => response.json());
+  assert.equal(workspace.workspace.name, "Trading");
+
+  const settings = await fetch(`${instance.url}/api/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locale: "en-US", notificationFrequency: "all" }),
+  }).then((response) => response.json());
+  assert.equal(settings.preferences.locale, "en-US");
+
+  const exported = await fetch(`${instance.url}/api/system/export`).then((response) => response.json());
+  assert.equal(exported.format, "portdeck-config");
+  assert.ok(exported.workspaces.some((item) => item.name === "Trading"));
 });
 
 test("managed service logs are exposed as a real-time event stream", async (t) => {
@@ -156,4 +179,28 @@ test("managed service lifecycle exposes owned identity and stops safely", async 
       try { process.kill(-pid, "SIGKILL"); } catch {}
     }
   }
+});
+
+test("service actions expose risk previews and require acknowledgement for risky commands", async (t) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "portdeck-risk-test-"));
+  let instance;
+  try {
+    instance = await startPortDeckServer({ port: 0, dataRoot, scanner: async () => [], logger: { log() {}, error() {} } });
+  } catch (error) {
+    if (error.code === "EPERM") return t.skip("The current sandbox blocks local listening sockets");
+    throw error;
+  }
+  t.after(() => instance.close());
+  const created = await fetch(`${instance.url}/api/services`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Risky", startCommand: "sudo rm -rf ./cache" }),
+  }).then((response) => response.json());
+  const preview = await fetch(`${instance.url}/api/services/${created.service.id}/risk/start`).then((response) => response.json());
+  assert.equal(preview.risk.severity, "critical");
+  const blocked = await fetch(`${instance.url}/api/services/${created.service.id}/start`, { method: "POST" });
+  assert.equal(blocked.status, 428);
+  const audit = await fetch(`${instance.url}/api/audit`).then((response) => response.json());
+  assert.equal(audit.entries[0].action, "start");
+  assert.equal(audit.entries[0].outcome, "blocked");
 });

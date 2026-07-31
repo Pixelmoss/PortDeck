@@ -1,6 +1,6 @@
 {
   "name": "portdeck",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "private": true,
   "author": "PortDeck",
   "description": "A local-first dashboard for discovering and managing development services.",
@@ -16,7 +16,11 @@
     "desktop:build:arm64": "node scripts/build-macos.mjs --arm64",
     "desktop:build:x64": "node scripts/build-macos.mjs --x64",
     "desktop:build:universal": "node scripts/build-macos.mjs --universal",
-    "desktop:verify": "node scripts/verify-macos-release.mjs"
+    "desktop:verify": "node scripts/verify-macos-release.mjs",
+    "release:manifest": "node scripts/generate-release-manifest.mjs",
+    "security:sbom": "npm sbom --sbom-format cyclonedx",
+    "native:build": "swift build --package-path native/PortDeckNative",
+    "native:pack": "node scripts/build-native-app.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -36,6 +40,13 @@
       "web/**/*",
       "package.json",
       "!**/._*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Pixelmoss",
+        "repo": "PortDeck"
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -77,5 +88,8 @@
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

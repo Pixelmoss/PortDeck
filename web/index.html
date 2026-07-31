@@ -35,7 +35,15 @@
           <button class="nav-item" data-filter="unhealthy">
             <span class="nav-icon status-unhealthy">!</span><span>健康异常</span><span class="nav-count" data-count="unhealthy">0</span>
           </button>
+          <button class="nav-item" data-filter="favorites">
+            <span class="nav-icon">★</span><span>收藏服务</span><span class="nav-count" data-count="favorites">0</span>
+          </button>
         </nav>
+
+        <div class="workspace-panel">
+          <label for="workspaceFilter">工作区</label>
+          <div><select id="workspaceFilter"><option value="all">全部工作区</option></select><button id="addWorkspaceButton" title="新建工作区">＋</button></div>
+        </div>
 
         <button class="desktop-settings-card" id="desktopSettingsButton" type="button">
           <span class="desktop-settings-icon">◈</span>
@@ -67,6 +75,14 @@
               <input id="searchInput" type="search" placeholder="搜索名称、端口或命令" autocomplete="off" />
               <kbd>⌘ K</kbd>
             </label>
+            <select class="toolbar-select" id="sortSelect" aria-label="服务排序">
+              <option value="status">状态排序</option>
+              <option value="name">名称排序</option>
+              <option value="port">端口排序</option>
+              <option value="workspace">工作区排序</option>
+              <option value="manual">手动顺序</option>
+            </select>
+            <button class="icon-button" id="historyButton" title="操作历史" aria-label="操作历史">◷</button>
             <button class="icon-button" id="refreshButton" title="立即扫描" aria-label="立即扫描">↻</button>
             <button class="primary-button" id="addButton"><span>＋</span> 添加服务</button>
           </div>
@@ -112,6 +128,14 @@
             </div>
           </div>
 
+          <div class="bulk-bar" id="bulkBar" hidden>
+            <span>已选择 <strong id="selectedCount">0</strong> 项</span>
+            <button class="secondary-button" data-bulk-action="start">批量启动</button>
+            <button class="secondary-button" data-bulk-action="restart">批量重启</button>
+            <button class="danger-button" data-bulk-action="stop">批量停止</button>
+            <button class="row-action" id="clearSelectionButton">清除</button>
+          </div>
+
           <div class="service-list" id="serviceList" aria-live="polite">
             <div class="loading-row"><span></span><span></span><span></span></div>
           </div>
@@ -132,6 +156,10 @@
         <input type="hidden" name="id" />
         <div class="form-grid">
           <label class="field span-2">
+            <span>服务模板</span>
+            <select id="templateSelect" name="template"><option value="">自定义配置</option></select>
+          </label>
+          <label class="field span-2">
             <span>服务名称</span>
             <input name="name" required maxlength="120" placeholder="例如：Vibe Trading" />
           </label>
@@ -146,6 +174,18 @@
           <label class="field span-2">
             <span>工作目录</span>
             <input name="cwd" placeholder="/path/to/project" />
+          </label>
+          <label class="field">
+            <span>工作区</span>
+            <select name="workspaceId" id="serviceWorkspace"></select>
+          </label>
+          <label class="field">
+            <span>服务分组</span>
+            <input name="group" placeholder="例如：前端 / 数据服务" />
+          </label>
+          <label class="field span-2">
+            <span>标签 <small>使用逗号分隔</small></span>
+            <input name="tags" placeholder="开发, API, 重要" />
           </label>
           <label class="field span-2">
             <span>启动命令 <em>必填</em></span>
@@ -179,6 +219,10 @@
               <input name="autoRestart" type="checkbox" />
               <span><strong>异常退出后自动重启</strong><small>只监督由 PortDeck 启动的进程</small></span>
             </label>
+            <label class="check-option">
+              <input name="favorite" type="checkbox" />
+              <span><strong>设为收藏</strong><small>置顶显示并加入菜单栏快捷操作</small></span>
+            </label>
           </div>
         </div>
         <div class="dialog-actions">
@@ -208,6 +252,18 @@
             <span></span>
           </label>
         </div>
+        <div class="desktop-setting-row stacked-setting">
+          <div><strong>语言 / Language</strong><small>切换中文或英文界面。</small></div>
+          <select id="localeSelect"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select>
+        </div>
+        <div class="desktop-setting-row stacked-setting">
+          <div><strong>服务状态通知</strong><small>控制健康异常、恢复和普通操作通知。</small></div>
+          <select id="notificationFrequencySelect"><option value="all">全部通知</option><option value="important">仅异常与恢复</option><option value="off">关闭通知</option></select>
+        </div>
+        <div class="desktop-setting-row">
+          <div><strong>崩溃报告（默认关闭）</strong><small>明确开启后，下次启动时生成本地崩溃诊断；不会自动上传。</small></div>
+          <label class="switch"><input id="crashReportingToggle" type="checkbox" /><span></span></label>
+        </div>
         <div class="desktop-maintenance-row">
           <div>
             <strong>数据安全与诊断</strong>
@@ -216,15 +272,54 @@
           <div class="maintenance-actions">
             <button type="button" class="secondary-button" id="backupConfigButton">备份配置</button>
             <button type="button" class="secondary-button" id="exportDiagnosticsButton">导出诊断</button>
+            <button type="button" class="secondary-button" id="exportConfigButton">导出配置</button>
+            <button type="button" class="secondary-button" id="importConfigButton">导入配置</button>
+            <input type="file" id="importConfigFile" accept="application/json,.json" hidden />
           </div>
+        </div>
+        <div class="desktop-maintenance-row">
+          <div><strong>软件更新</strong><small id="updateStatus">自动检查正式版本；下载和安装都由你确认，不会静默安装。</small></div>
+          <div class="maintenance-actions"><button type="button" class="secondary-button" id="checkUpdateButton">检查更新</button></div>
         </div>
         <div class="desktop-about-row">
           <span>当前版本</span>
-          <code id="desktopVersion">1.1.0</code>
+          <code id="desktopVersion">1.5.0</code>
         </div>
         <div class="dialog-actions">
           <button type="button" class="primary-button" data-close-desktop-settings>完成</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="workspaceDialog" class="dialog compact-dialog">
+      <form id="workspaceForm" method="dialog">
+        <div class="dialog-header"><div><p class="eyebrow">WORKSPACE</p><h2>新建工作区</h2></div><button type="button" class="close-button" data-close-workspace>×</button></div>
+        <div class="form-grid workspace-form"><label class="field span-2"><span>工作区名称</span><input name="name" required maxlength="80" placeholder="例如：交易工具" /></label><label class="field span-2"><span>标识颜色</span><input name="color" type="color" value="#65e6a7" /></label></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-close-workspace>取消</button><button type="submit" class="primary-button">创建</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="riskDialog" class="dialog compact-dialog">
+      <form method="dialog">
+        <div class="dialog-header"><div><p class="eyebrow">RISK PREVIEW</p><h2 id="riskTitle">执行前风险预览</h2></div><button type="button" class="close-button" data-risk-cancel>×</button></div>
+        <div class="risk-panel" id="riskContent"></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-risk-cancel>取消</button><button type="button" class="danger-button" id="riskConfirmButton">了解风险并继续</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="historyDialog" class="dialog history-dialog">
+      <form method="dialog">
+        <div class="dialog-header"><div><p class="eyebrow">AUDIT TRAIL</p><h2>操作历史</h2></div><button type="button" class="close-button" data-close-history>×</button></div>
+        <div class="history-list" id="historyList"></div>
+        <div class="dialog-actions"><button type="button" class="primary-button" data-close-history>完成</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="onboardingDialog" class="dialog onboarding-dialog">
+      <form method="dialog">
+        <div class="onboarding-mark">◈</div><p class="eyebrow">WELCOME TO PORTDECK</p><h2>把本地服务整理成一个工作台</h2>
+        <div class="onboarding-grid"><div><strong>1 · 自动发现</strong><span>启动本机 Web 服务后自动出现在列表。</span></div><div><strong>2 · 安全纳管</strong><span>配置启停命令，并在执行前查看风险。</span></div><div><strong>3 · 持续观察</strong><span>健康检查、实时日志、异常与恢复通知。</span></div></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" id="onboardingEnglishButton">View in English</button><button type="button" class="primary-button" id="finishOnboardingButton">开始使用</button></div>
       </form>
     </dialog>
 

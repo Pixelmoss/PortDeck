@@ -2,13 +2,13 @@
 
 PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS 上正在监听的 TCP 服务，并允许你把临时发现的进程转为可持久管理、可一键启动和停止的服务。
 
-当前源码版本是 `1.1.0` Electron 桌面应用。它把服务发现、HTTP 健康检查、智能项目识别、可靠进程管理、实时日志、数据恢复和 macOS 菜单栏控制整合在一个本地优先的应用中。
+当前源码版本是 `1.5.0`。Electron 桌面版仍是完整能力宿主，同时提供一个可编译运行的 SwiftUI 原生壳，通过版本化本地 API 复用服务发现、健康检查、进程管理、日志和配置能力。
 
 ## 下载
 
-当前内部测试包可从 [PortDeck 1.0.0 Release](https://github.com/Pixelmoss/PortDeck/releases/tag/v1.0.0) 下载。1.1 安装包将在完整验证后生成。
+历史内部测试包可从 [GitHub Releases](https://github.com/Pixelmoss/PortDeck/releases) 下载。1.5 正式包需要在仓库配置 Apple 签名与公证凭据后，由发布流水线生成。
 
-> 本机可生成 1.1 内部测试包；面向其他用户分发前必须完成 Developer ID 签名与 Apple 公证。
+> 没有 Developer ID 签名和 Apple 公证的本机构建仍只适合内部验证。
 
 ## 已实现
 
@@ -39,8 +39,17 @@ PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS �
 - 正式 PortDeck 应用图标、ASAR 打包和 Hardened Runtime 权限配置
 - GitHub Actions 双架构签名、公证与 Release 工作流
 - 配置保存在 macOS 标准 Application Support 目录
-- schema v3 配置迁移、最近 10 份滚动备份和损坏自动恢复
+- schema v4 配置迁移、最近 10 份滚动备份和损坏自动恢复
 - 5 MB 日志轮转、三份历史日志和一键导出隐私友好的诊断报告
+- 工作区、服务分组、标签、收藏、排序和批量启停
+- Node.js、Python、Docker Compose、静态网站服务模板
+- 首次使用引导和高风险命令执行前确认
+- 最多 500 条操作审计，以及配置合并导入和导出
+- 健康异常/恢复通知与通知频率控制
+- 中英文界面基础、本地崩溃诊断明确选择开启
+- 用户确认式自动更新：自动检查、确认下载、确认安装
+- SwiftUI 服务列表、详情、日志、菜单栏、通知和登录启动壳
+- ARM64、x64、universal 发布矩阵、SBOM、校验清单和官网/隐私/支持页源码
 
 ## 运行
 
@@ -104,8 +113,26 @@ npm run desktop:build:universal
 npm run desktop:verify -- release/mac-universal/PortDeck.app
 ```
 
-签名、公证凭据和 GitHub Release 配置见 [docs/RELEASING.md](docs/RELEASING.md)。
+签名、公证凭据和 GitHub Release 配置见 [docs/RELEASING.md](docs/RELEASING.md)，完整分发清单见 [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)。
 Mac App Store 双版本策略和沙箱验证清单见 [docs/APP_STORE_FEASIBILITY.md](docs/APP_STORE_FEASIBILITY.md)。
+
+## SwiftUI 原生壳
+
+先启动本地能力服务器，再运行原生壳：
+
+```bash
+npm start
+npm run native:build
+swift run --package-path native/PortDeckNative
+```
+
+生成可直接启动的本地 QA `.app`：
+
+```bash
+npm run native:pack
+```
+
+原生壳的边界和迁移说明见 [native/PortDeckNative/README.md](native/PortDeckNative/README.md)，本地 API 契约见 [docs/CAPABILITY_API.md](docs/CAPABILITY_API.md)。
 
 ## 配置与日志
 
@@ -137,12 +164,12 @@ Node 本地守护进程
     ├── Recognizer：项目清单 + 进程命令推断
     ├── Inspector：HTTP 状态 + 延迟 + 页面元数据
     ├── Catalog：合并发现态与受管态
-    ├── Registry：schema v3、原子持久化、备份与损坏恢复
+    ├── Registry：schema v4、工作区、偏好、审计、原子持久化与恢复
     ├── Process Manager：进程身份、所有权恢复、进程组与自动重启
     └── Log Stream：SSE 实时日志
 ```
 
-Electron 主进程直接嵌入同一个 Node 本地服务模块。后续 SwiftUI 版本将继续沿用稳定后的服务配置格式和状态模型。
+Electron 主进程直接嵌入同一个 Node 本地能力模块。SwiftUI 壳通过仅监听 loopback 的 v1 Capability API 使用同一能力；后续可按能力逐项替换 Node 实现，不需要一次性重写。
 
 ## 正式发布前置条件
 

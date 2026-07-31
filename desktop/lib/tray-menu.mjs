@@ -54,6 +54,9 @@ export function buildTrayMenuTemplate({
   const offlineManaged = services
     .filter((service) => service.source === "managed" && service.status === "offline")
     .slice(0, serviceLimit);
+  const favorites = services
+    .filter((service) => service.favorite)
+    .slice(0, serviceLimit);
 
   const runningItems = running.length
     ? running.map((service) => runningServiceItem(service, handlers))
@@ -64,6 +67,15 @@ export function buildTrayMenuTemplate({
     { type: "separator" },
     ...runningItems,
   ];
+
+  if (favorites.length) {
+    template.push({
+      label: `收藏服务 (${favorites.length})`,
+      submenu: favorites.map((service) => service.status === "running"
+        ? runningServiceItem(service, handlers)
+        : offlineServiceItem(service, handlers)),
+    });
+  }
 
   if (offlineManaged.length) {
     template.push({

@@ -31,7 +31,8 @@ test("ServiceRegistry persists and reloads services", async () => {
   assert.equal(reloaded.find(created.id).healthCheckEnabled, true);
   assert.equal(reloaded.find(created.id).protocol, "http");
   assert.equal(reloaded.find(created.id).desiredState, "stopped");
-  assert.match(await readFile(filePath, "utf8"), /"version": 3/);
+  assert.equal(reloaded.find(created.id).workspaceId, "default");
+  assert.match(await readFile(filePath, "utf8"), /"version": 4/);
 });
 
 test("ServiceRegistry migrates v2 data and keeps a backup", async () => {
@@ -46,7 +47,39 @@ test("ServiceRegistry migrates v2 data and keeps a backup", async () => {
   await registry.load();
   assert.equal(registry.find("svc_old").desiredState, "stopped");
   assert.equal((await registry.status()).backupCount, 1);
-  assert.match(await readFile(filePath, "utf8"), /"version": 3/);
+  assert.match(await readFile(filePath, "utf8"), /"version": 4/);
+});
+
+test("ServiceRegistry stores workspaces, preferences, audit history and import/export snapshots", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "portdeck-v4-test-"));
+  const registry = new ServiceRegistry(path.join(directory, "services.json"));
+  await registry.load();
+  const workspace = await registry.upsertWorkspace({ name: "Client A", color: "#112233" });
+  const service = await registry.upsert({
+    name: "API",
+    startCommand: "npm start",
+    workspaceId: workspace.id,
+    group: "Backend",
+    tags: ["api", "important", "api"],
+    favorite: true,
+  });
+  await registry.updatePreferences({ locale: "en-US", notificationFrequency: "all" });
+  await registry.recordAudit({ action: "start", serviceId: service.id, serviceName: service.name, outcome: "success" });
+  await registry.recordAudit({ action: "stop", serviceId: service.id, serviceName: service.name, outcome: "blocked" });
+
+  const snapshot = registry.exportSnapshot();
+  assert.equal(snapshot.format, "portdeck-config");
+  assert.equal(snapshot.services[0].favorite, true);
+  assert.deepEqual(snapshot.services[0].tags, ["api", "important"]);
+  assert.equal(registry.getPreferences().locale, "en-US");
+  assert.equal(registry.listAudit()[0].action, "stop");
+  assert.equal(registry.listAudit()[0].outcome, "blocked");
+
+  const imported = new ServiceRegistry(path.join(directory, "imported.json"));
+  await imported.load();
+  await imported.importSnapshot(snapshot, { mode: "replace" });
+  assert.equal(imported.find(service.id).group, "Backend");
+  assert.ok(imported.listWorkspaces().some((item) => item.name === "Client A"));
 });
 
 test("ServiceRegistry restores the latest valid backup after corruption", async () => {

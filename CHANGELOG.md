@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.5.0 - 2026-07-31
+
+### Added
+
+- Workspaces, groups, favorites, tags, manual ordering and bulk service actions
+- Node.js, Python, Docker Compose and static-site service templates
+- First-run onboarding and command risk previews with explicit acknowledgement
+- Persistent audit history with blocked, successful and failed outcomes
+- Configuration import/export and registry schema v4 migration
+- Health failure/recovery notifications and notification-frequency controls
+- Chinese/English interface foundation and opt-in-only local crash diagnostics
+- User-confirmed automatic update checks, downloads and installs through signed GitHub Releases
+- Versioned local capability API for discovery, health, process, log, storage and desktop capabilities
+- SwiftUI transition shell with native list/detail/log views, menu bar, notifications and `SMAppService` login launch
+- ARM64, x64 and universal release matrix, production dependency audit, CycloneDX SBOM and release manifest
+- Website, privacy policy, support page and distribution-readiness documentation
+
+### Changed
+
+- Updated the product version from 1.1.0 to 1.5.0
+- Expanded the automated Node test suite and added a macOS 13-compatible Swift build check
+- High-risk tray actions now route users to the main window for confirmation
+- Electron remains the full capability host while the SwiftUI shell replaces it capability-by-capability
+
+### External requirements
+
+- Public distribution still requires the product owner's Apple Developer Program membership, Developer ID Application certificate and notarization credentials
+- Mac App Store distribution still requires a separate sandbox capability matrix and App Review-ready target
+
 ## 1.1.0 - 2026-07-31
 
 ### Added

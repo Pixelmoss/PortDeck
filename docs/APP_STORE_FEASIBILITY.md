@@ -8,7 +8,9 @@ PortDeck 官网版依赖 `lsof`、`ps`、任意用户命令、进程组信号和
 - App Store 版：共享服务模型、健康检查和 UI，只启用沙箱验证通过的能力。
 - 不使用独立下载的未沙箱 Helper 绕过 App Store 限制。
 
-## SwiftUI 沙箱原型必须验证的能力
+## SwiftUI 壳现状与沙箱验证
+
+1.5 已交付一个不启用 App Sandbox 的 SwiftUI 过渡壳，验证原生列表、详情、菜单栏、设置、日志、通知、登录启动和风险确认，并复用 loopback Capability API。它不是 App Store 构建；下面的沙箱能力仍必须在独立 Xcode target 中实机验证。
 
 | 能力 | 当前实现 | 原型验收条件 | 初始判断 |
 |---|---|---|---|
@@ -21,7 +23,7 @@ PortDeck 官网版依赖 `lsof`、`ps`、任意用户命令、进程组信号和
 | 登录时启动 | Electron login item | 使用 `SMAppService` 静默启动 | 预计支持 |
 | 实时日志 | 文件尾读/SSE | 读取应用创建或用户授权目录中的日志 | 预计支持 |
 
-## 原型交付物
+## App Store 原型后续交付物
 
 1. 一个启用 App Sandbox 的最小 SwiftUI 工程。
 2. 每项能力的“支持 / 需要用户授权 / 不支持”实机矩阵。
@@ -29,4 +31,4 @@ PortDeck 官网版依赖 `lsof`、`ps`、任意用户命令、进程组信号和
 4. 官网版和 App Store 版的功能差异清单。
 5. TestFlight 构建与 App Review 说明草案。
 
-在矩阵完成前，不开始完整 SwiftUI 重写。1.1 的 schema v3、进程身份模型和诊断格式将作为后续原生版本的兼容契约。
+在矩阵完成前，不移除 Electron 完整能力宿主。1.5 的 schema v4、进程身份模型、诊断格式和 v1 Capability API 将作为后续原生版本的兼容契约。
