@@ -2,11 +2,11 @@
 
 PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS 上正在监听的 TCP 服务，并允许你把临时发现的进程转为可持久管理、可一键启动和停止的服务。
 
-当前源码版本是 `1.5.0`。Electron 桌面版仍是完整能力宿主，同时提供一个可编译运行的 SwiftUI 原生壳，通过版本化本地 API 复用服务发现、健康检查、进程管理、日志和配置能力。
+当前源码版本是 `2.0.0`。Electron 桌面版仍是完整能力宿主，同时提供一个可编译运行的 SwiftUI 原生壳，通过版本化本地 API 复用服务发现、健康检查、进程管理、日志和配置能力。2.0 提供完整的中英文即时切换、安装包体积守门和正式发布校验能力。
 
 ## 下载
 
-历史内部测试包可从 [GitHub Releases](https://github.com/Pixelmoss/PortDeck/releases) 下载。1.5 正式包需要在仓库配置 Apple 签名与公证凭据后，由发布流水线生成。
+历史内部测试包可从 [GitHub Releases](https://github.com/Pixelmoss/PortDeck/releases) 下载。2.0 正式包需要在仓库配置 Apple 签名与公证凭据后，由发布流水线生成。
 
 > 没有 Developer ID 签名和 Apple 公证的本机构建仍只适合内部验证。
 
@@ -46,7 +46,8 @@ PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS �
 - 首次使用引导和高风险命令执行前确认
 - 最多 500 条操作审计，以及配置合并导入和导出
 - 健康异常/恢复通知与通知频率控制
-- 中英文界面基础、本地崩溃诊断明确选择开启
+- 在桌面设置中即时切换中英文，并同步菜单栏、应用菜单、系统通知和更新提示
+- 本地崩溃诊断明确选择开启
 - 用户确认式自动更新：自动检查、确认下载、确认安装
 - SwiftUI 服务列表、详情、日志、菜单栏、通知和登录启动壳
 - ARM64、x64、universal 发布矩阵、SBOM、校验清单和官网/隐私/支持页源码
@@ -100,6 +101,14 @@ npm run desktop:build
 
 构建产物位于 `release/`。构建脚本会自动使用 APFS 临时目录，避免项目位于外置卷时出现 ASAR 文件偏移错误。
 
+检查安装包是否符合架构体积预算：
+
+```bash
+npm run size:check -- --arch=arm64
+```
+
+体积基线、预算和优化边界见 [docs/BUNDLE_SIZE.md](docs/BUNDLE_SIZE.md)。
+
 Apple Silicon 内部测试包：
 
 ```bash
@@ -146,6 +155,7 @@ npm run native:pack
 
 - `PORTDECK_PORT`：控制台端口，默认 `4399`
 - `PORTDECK_DATA_DIR`：配置和日志目录，默认项目下的 `data/`
+- `PORTDECK_USER_DATA_DIR`：Electron 打包应用的隔离 QA 数据目录；日常使用无需设置
 
 Electron 版本使用 macOS 标准目录：
 

@@ -5,7 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outputRoot = path.join(projectRoot, "release");
+const outputRoot = process.env.PORTDECK_BUILD_OUTPUT_DIR
+  ? path.resolve(process.env.PORTDECK_BUILD_OUTPUT_DIR)
+  : path.join(projectRoot, "release");
 const stageRoot = await mkdtemp(path.join(os.tmpdir(), "portdeck-build-"));
 const sourceEntries = ["package.json", "package-lock.json", "desktop", "server", "web", "scripts"];
 

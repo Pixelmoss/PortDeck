@@ -4,10 +4,6 @@ import path from "node:path";
 
 const appPath = path.resolve(process.argv[2] || "release/mac-arm64/PortDeck.app");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-if (!existsSync(appPath)) {
-  console.error(`App bundle not found: ${appPath}`);
-  process.exit(1);
-}
 
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -21,7 +17,9 @@ function run(command, args) {
 }
 
 try {
-  const version = run("/usr/bin/defaults", ["read", path.join(appPath, "Contents/Info"), "CFBundleShortVersionString"]);
+  if (!existsSync(appPath)) throw new Error(`App bundle not found: ${appPath}`);
+  const infoPath = path.join(appPath, "Contents/Info");
+  const version = run("/usr/bin/defaults", ["read", infoPath, "CFBundleShortVersionString"]);
   if (version !== packageJson.version) throw new Error(`Expected version ${packageJson.version}, received ${version}`);
 
   const executable = path.join(appPath, "Contents/MacOS/PortDeck");
@@ -30,14 +28,13 @@ try {
     throw new Error(`Unexpected executable architectures: ${architectures.join(", ")}`);
   }
 
-  run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
-  const signature = run("/usr/bin/codesign", ["-dv", "--verbose=4", appPath]);
-  if (!signature.includes("Developer ID Application")) throw new Error("The app is not signed with a Developer ID Application certificate");
+  const resources = path.join(appPath, "Contents/Resources");
+  if (!existsSync(path.join(resources, "app.asar"))) throw new Error("Packaged app.asar is missing");
+  const locales = ["en.lproj", "zh_CN.lproj"].filter((name) => existsSync(path.join(resources, name)));
+  if (locales.length !== 2) throw new Error(`Expected English and Simplified Chinese resources, found: ${locales.join(", ") || "none"}`);
 
-  run("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
-  run("/usr/bin/xcrun", ["stapler", "validate", appPath]);
-  console.log(`Verified signed and notarized PortDeck ${version} (${architectures.join("+")}): ${appPath}`);
+  console.log(`Verified PortDeck ${version} bundle (${architectures.join("+")}; ${locales.join("+")}): ${appPath}`);
 } catch (error) {
-  console.error(`Release verification failed:\n${error.message}`);
+  console.error(`Bundle verification failed:\n${error.message}`);
   process.exitCode = 1;
 }

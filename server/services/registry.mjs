@@ -42,6 +42,11 @@ function cleanStringArray(value, { maxItems = 12, maxLength = 40 } = {}) {
 }
 
 function sanitizePreferences(input = {}, existing = {}) {
+  const locale = ["zh-CN", "en-US"].includes(input.locale)
+    ? input.locale
+    : ["zh-CN", "en-US"].includes(existing.locale)
+      ? existing.locale
+      : DEFAULT_PREFERENCES.locale;
   const notificationFrequency = ["all", "important", "off"].includes(input.notificationFrequency)
     ? input.notificationFrequency
     : existing.notificationFrequency || DEFAULT_PREFERENCES.notificationFrequency;
@@ -49,7 +54,7 @@ function sanitizePreferences(input = {}, existing = {}) {
     ? input.sortBy
     : existing.sortBy || DEFAULT_PREFERENCES.sortBy;
   return {
-    locale: input.locale === "en-US" ? "en-US" : existing.locale === "en-US" ? "en-US" : "zh-CN",
+    locale,
     onboardingComplete: Boolean(input.onboardingComplete ?? existing.onboardingComplete),
     notificationsEnabled: Boolean(input.notificationsEnabled ?? existing.notificationsEnabled ?? true),
     notificationFrequency,

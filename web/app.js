@@ -14,6 +14,9 @@ const state = {
   workspaceFilter: "all",
   selected: new Set(),
   pendingRiskAction: null,
+  scannedAt: null,
+  dataSafetyRegistry: null,
+  updateStatusInfo: null,
 };
 
 if (window.portdeckDesktop) document.documentElement.classList.add("desktop-shell");
@@ -187,6 +190,64 @@ function applyLocale(locale = "zh-CN") {
   FILTER_LABELS.unhealthy = locale === "en-US" ? "Unhealthy" : "健康异常";
   FILTER_LABELS.favorites = locale === "en-US" ? "Favorites" : "收藏服务";
   elements.onboardingEnglishButton.textContent = locale === "en-US" ? "切换到中文" : "View in English";
+  elements.localeSelect.value = locale;
+  renderScanStatus();
+  renderDataSafetyStatus();
+  renderUpdateStatus();
+  if (state.desktop) applyDesktopSettings(state.desktop);
+}
+
+function renderScanStatus() {
+  if (!state.scannedAt) return;
+  const englishServiceCount = `${state.summary.total} ${state.summary.total === 1 ? "service" : "services"}`;
+  elements.scanStatus.textContent = tr(
+    `最近扫描 ${state.scannedAt.toLocaleTimeString("zh-CN", { hour12: false })} · ${state.summary.total} 个服务`,
+    `Last scan ${state.scannedAt.toLocaleTimeString("en-US", { hour12: false })} · ${englishServiceCount}`,
+  );
+}
+
+function englishRecoveryNotice(notice) {
+  const restored = notice?.match(/^配置文件损坏，已从备份 (.+) 恢复$/);
+  if (restored) return `Configuration was corrupted and restored from backup ${restored[1]}`;
+  const quarantined = notice?.match(/^配置文件损坏，已保留为 (.+)；未找到可用备份$/);
+  if (quarantined) return `Configuration was corrupted and preserved as ${quarantined[1]}; no valid backup was found`;
+  return notice;
+}
+
+function renderDataSafetyStatus() {
+  const registry = state.dataSafetyRegistry;
+  if (!registry) return;
+  const englishBackupCount = `${registry.backupCount} ${registry.backupCount === 1 ? "backup" : "backups"}`;
+  elements.dataSafetyStatus.textContent = registry.recoveryNotice
+    ? (isEnglish() ? englishRecoveryNotice(registry.recoveryNotice) : registry.recoveryNotice)
+    : tr(
+      `配置 schema v${registry.schemaVersion} · ${registry.backupCount} 份备份 · 日志自动轮转`,
+      `Configuration schema v${registry.schemaVersion} · ${englishBackupCount} · automatic log rotation`,
+    );
+}
+
+function renderUpdateStatus() {
+  const status = state.updateStatusInfo;
+  if (!status) return;
+  const version = status.version || "";
+  if (status.state === "browser-unavailable") elements.updateStatus.textContent = tr("浏览器模式无法检查桌面应用更新。", "Desktop updates are unavailable in browser mode.");
+  if (status.state === "checking") elements.updateStatus.textContent = tr("正在检查 GitHub Release…", "Checking GitHub Releases…");
+  if (status.state === "checking-auto") elements.updateStatus.textContent = tr("正在自动检查更新…", "Checking for updates automatically…");
+  if (status.state === "available") elements.updateStatus.textContent = tr(`发现 ${version}，等待下载确认。`, `${version} is available and awaiting download confirmation.`);
+  if (status.state === "available-auto") elements.updateStatus.textContent = tr(`发现 ${version}，点击“检查更新”下载。`, `${version} is available. Click “Check for updates” to download.`);
+  if (status.state === "current") elements.updateStatus.textContent = tr(`当前 ${version} 已是最新版本。`, `${version} is the latest version.`);
+  if (status.state === "downloading") elements.updateStatus.textContent = status.percent == null
+    ? tr(`正在下载 ${version}…`, `Downloading ${version}…`)
+    : tr(`正在下载更新… ${status.percent}%`, `Downloading update… ${status.percent}%`);
+  if (status.state === "downloaded") elements.updateStatus.textContent = status.installPrompt
+    ? tr(`${version} 已下载；点击“检查更新”可立即安装。`, `${version} downloaded; click “Check for updates” to install now.`)
+    : tr(`${version} 已下载，重启后安装。`, `${version} downloaded; restart to install.`);
+  if (status.state === "error") elements.updateStatus.textContent = tr(`更新失败：${status.message}`, `Update failed: ${status.message}`);
+}
+
+function setUpdateStatus(status) {
+  state.updateStatusInfo = status;
+  renderUpdateStatus();
 }
 
 function escapeHtml(value = "") {
@@ -293,7 +354,7 @@ function healthBadge(service) {
     return `<span class="badge health healthy" title="${escapeHtml(health.url)}">HEALTHY${latency}</span>`;
   }
   if (health.status === "unhealthy") {
-    return `<span class="badge health unhealthy" title="${escapeHtml(health.error || "健康检查失败")}">UNHEALTHY</span>`;
+    return `<span class="badge health unhealthy" title="${escapeHtml(health.error || tr("健康检查失败", "Health check failed"))}">UNHEALTHY</span>`;
   }
   if (health.status === "disabled") return '<span class="badge health disabled">CHECK OFF</span>';
   return '<span class="badge health unknown">NO HTTP</span>';
@@ -302,12 +363,12 @@ function healthBadge(service) {
 function ownershipBadge(service) {
   if (service.status !== "running" || service.source !== "managed") return "";
   if (service.ownership === "portdeck") {
-    return '<span class="badge ownership portdeck" title="当前进程由 PortDeck 启动并持续跟踪">OWNED</span>';
+    return `<span class="badge ownership portdeck" title="${tr("当前进程由 PortDeck 启动并持续跟踪", "This process was started and is tracked by PortDeck")}">OWNED</span>`;
   }
   if (service.ownership === "recovered") {
-    return '<span class="badge ownership recovered" title="PortDeck 重启后通过进程身份恢复了管理关系">RECOVERED</span>';
+    return `<span class="badge ownership recovered" title="${tr("PortDeck 重启后通过进程身份恢复了管理关系", "PortDeck recovered process ownership after relaunch")}">RECOVERED</span>`;
   }
-  return '<span class="badge ownership external" title="外部进程；停止前会重新验证进程身份">EXTERNAL</span>';
+  return `<span class="badge ownership external" title="${tr("外部进程；停止前会重新验证进程身份", "External process; its identity will be verified before stopping")}">EXTERNAL</span>`;
 }
 
 function faviconMarkup(service) {
@@ -402,7 +463,7 @@ async function api(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(payload.error || `请求失败 (${response.status})`);
+    const error = new Error(payload.error || tr(`请求失败 (${response.status})`, `Request failed (${response.status})`));
     error.details = payload.details;
     throw error;
   }
@@ -448,11 +509,8 @@ async function loadServices({ fresh = false, silent = false } = {}) {
       if (!state.preferences.onboardingComplete && !elements.onboardingDialog.open) elements.onboardingDialog.showModal();
       applyLocale(state.preferences.locale);
     }
-    const scanned = new Date(data.scannedAt);
-    elements.scanStatus.textContent = tr(
-      `最近扫描 ${scanned.toLocaleTimeString("zh-CN", { hour12: false })} · ${data.summary.total} 个服务`,
-      `Last scan ${scanned.toLocaleTimeString("en-US", { hour12: false })} · ${data.summary.total} services`,
-    );
+    state.scannedAt = new Date(data.scannedAt);
+    renderScanStatus();
   } catch (error) {
     elements.scanStatus.textContent = tr("扫描失败", "Scan failed");
     toast(error.message, "error");
@@ -494,12 +552,8 @@ async function loadDesktopSettings() {
 
 async function loadDataSafetyStatus() {
   const diagnostics = await api("/api/system/diagnostics");
-  const registry = diagnostics.registry;
-  elements.dataSafetyStatus.textContent = registry.recoveryNotice
-    || tr(
-      `配置 schema v${registry.schemaVersion} · ${registry.backupCount} 份备份 · 日志自动轮转`,
-      `Configuration schema v${registry.schemaVersion} · ${registry.backupCount} backups · automatic log rotation`,
-    );
+  state.dataSafetyRegistry = diagnostics.registry;
+  renderDataSafetyStatus();
   return diagnostics;
 }
 
@@ -507,8 +561,9 @@ async function createConfigBackup() {
   elements.backupConfigButton.disabled = true;
   try {
     const result = await api("/api/system/backup", { method: "POST" });
-    elements.dataSafetyStatus.textContent = `已创建 ${result.fileName} · 共 ${result.registry.backupCount} 份备份`;
-    toast("配置备份已创建");
+    state.dataSafetyRegistry = result.registry;
+    renderDataSafetyStatus();
+    toast(tr("配置备份已创建", "Configuration backup created"));
   } finally {
     elements.backupConfigButton.disabled = false;
   }
@@ -527,7 +582,7 @@ async function exportDiagnostics() {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(href), 1000);
-    toast("诊断报告已导出");
+    toast(tr("诊断报告已导出", "Diagnostics exported"));
   } finally {
     elements.exportDiagnosticsButton.disabled = false;
   }
@@ -630,7 +685,7 @@ async function performAction(service, action) {
   if (["start", "stop", "restart"].includes(action)) {
     const { risk } = await api(`/api/services/${encodeURIComponent(service.id)}/risk/${action}`);
     const verb = action === "start" ? tr("启动", "Start") : action === "stop" ? tr("停止", "Stop") : tr("重启", "Restart");
-    const confirmed = await confirmRisk(risk, `${verb}「${service.name}」`);
+    const confirmed = await confirmRisk(risk, isEnglish() ? `${verb} “${service.name}”` : `${verb}「${service.name}」`);
     if (!confirmed) return;
   }
 
@@ -712,6 +767,9 @@ async function updatePreferences(patch) {
   renderWorkspaceOptions();
   applyLocale(state.preferences.locale);
   render();
+  if (patch.locale && window.portdeckDesktop?.setLocale) {
+    await window.portdeckDesktop.setLocale(state.preferences.locale);
+  }
   return data.preferences;
 }
 
@@ -753,7 +811,13 @@ async function performBulkAction(action) {
     body: JSON.stringify({ ids: [...state.selected], action, riskAcknowledged: true, source: "web" }),
   });
   const failures = result.results.filter((item) => !item.ok);
-  toast(failures.length ? `${result.results.length - failures.length} 项成功，${failures.length} 项失败` : "批量操作已执行", failures.length ? "error" : "success");
+  const succeeded = result.results.length - failures.length;
+  toast(
+    failures.length
+      ? tr(`${succeeded} 项成功，${failures.length} 项失败`, `${succeeded} succeeded, ${failures.length} failed`)
+      : tr("批量操作已执行", "Bulk operation completed"),
+    failures.length ? "error" : "success",
+  );
   state.selected.clear();
   await loadServices({ fresh: true, silent: true });
 }
@@ -780,39 +844,49 @@ async function importConfigFile(file) {
   const commandCount = Array.isArray(snapshot.services) ? snapshot.services.filter((service) => service.startCommand || service.stopCommand).length : 0;
   const risk = {
     severity: commandCount ? "high" : "medium",
-    command: `${file.name} · ${commandCount} 个服务包含可执行命令`,
+    command: tr(
+      `${file.name} · ${commandCount} 个服务包含可执行命令`,
+      `${file.name} · ${commandCount} services contain executable commands`,
+    ),
     findings: [{ severity: "high", message: tr("导入会把配置文件中的命令加入 PortDeck；请只导入你信任的文件。", "Imported commands become executable by PortDeck; import only files you trust.") }],
   };
-  if (!await confirmRisk(risk, "导入配置")) return;
+  if (!await confirmRisk(risk, tr("导入配置", "Import configuration"))) return;
   const result = await api("/api/system/import", { method: "POST", body: JSON.stringify({ snapshot, mode: "merge" }) });
-  toast(`已导入配置，共 ${result.serviceCount} 个服务`);
+  toast(tr(`已导入配置，共 ${result.serviceCount} 个服务`, `Configuration imported · ${result.serviceCount} services`));
   await loadServices({ fresh: true, silent: true });
 }
 
 async function checkForUpdates() {
   if (!window.portdeckDesktop?.checkForUpdates) {
-    elements.updateStatus.textContent = tr("浏览器模式无法检查桌面应用更新。", "Desktop updates are unavailable in browser mode.");
+    setUpdateStatus({ state: "browser-unavailable" });
     return;
   }
   elements.checkUpdateButton.disabled = true;
-    elements.updateStatus.textContent = tr("正在检查 GitHub Release…", "Checking GitHub Releases…");
+  setUpdateStatus({ state: "checking" });
   try {
     const result = await window.portdeckDesktop.checkForUpdates();
-    elements.updateStatus.textContent = result.available
-      ? `发现 ${result.latestVersion}，等待下载确认。`
-      : `当前 ${result.currentVersion} 已是最新版本。`;
-    if (result.available && result.canAutoUpdate && window.confirm(`发现 PortDeck ${result.latestVersion}，是否下载更新？`)) {
-      elements.updateStatus.textContent = `正在下载 ${result.latestVersion}…`;
+    setUpdateStatus({ state: result.available ? "available" : "current", version: result.available ? result.latestVersion : result.currentVersion });
+    if (result.available && result.canAutoUpdate && window.confirm(tr(
+      `发现 PortDeck ${result.latestVersion}，是否下载更新？`,
+      `PortDeck ${result.latestVersion} is available. Download it now?`,
+    ))) {
+      setUpdateStatus({ state: "downloading", version: result.latestVersion });
       await window.portdeckDesktop.downloadUpdate();
-      elements.updateStatus.textContent = `${result.latestVersion} 已下载，重启后安装。`;
-      if (window.confirm(`PortDeck ${result.latestVersion} 已下载，是否现在重启并安装？`)) {
+      setUpdateStatus({ state: "downloaded", version: result.latestVersion, installPrompt: false });
+      if (window.confirm(tr(
+        `PortDeck ${result.latestVersion} 已下载，是否现在重启并安装？`,
+        `PortDeck ${result.latestVersion} has downloaded. Restart and install now?`,
+      ))) {
         await window.portdeckDesktop.installUpdate();
       }
-    } else if (result.available && result.releaseUrl && window.confirm(`发现 PortDeck ${result.latestVersion}，是否打开下载页面？`)) {
+    } else if (result.available && result.releaseUrl && window.confirm(tr(
+      `发现 PortDeck ${result.latestVersion}，是否打开下载页面？`,
+      `PortDeck ${result.latestVersion} is available. Open the download page?`,
+    ))) {
       window.open(result.releaseUrl, "_blank", "noopener,noreferrer");
     }
   } catch (error) {
-    elements.updateStatus.textContent = `检查失败：${error.message}`;
+    setUpdateStatus({ state: "error", message: error.message });
   } finally {
     elements.checkUpdateButton.disabled = false;
   }
@@ -937,7 +1011,9 @@ if (window.portdeckDesktop) {
   });
   elements.crashReportingToggle.addEventListener("change", () => {
     updatePreferences({ crashReportingEnabled: elements.crashReportingToggle.checked })
-      .then(() => toast(elements.crashReportingToggle.checked ? "已开启本地崩溃诊断" : "已关闭崩溃诊断"))
+      .then(() => toast(elements.crashReportingToggle.checked
+        ? tr("已开启本地崩溃诊断", "Local crash diagnostics enabled")
+        : tr("已关闭崩溃诊断", "Crash diagnostics disabled")))
       .catch((error) => toast(error.message, "error"));
   });
   elements.exportConfigButton.addEventListener("click", () => exportConfig().catch((error) => toast(error.message, "error")));
@@ -950,12 +1026,13 @@ if (window.portdeckDesktop) {
   elements.checkUpdateButton.addEventListener("click", checkForUpdates);
   window.portdeckDesktop.onSettingsChanged(applyDesktopSettings);
   window.portdeckDesktop.onUpdateStatus?.((status) => {
-    if (status.state === "checking") elements.updateStatus.textContent = "正在自动检查更新…";
-    if (status.state === "available") elements.updateStatus.textContent = `发现 ${status.version}，点击“检查更新”下载。`;
-    if (status.state === "current") elements.updateStatus.textContent = `当前 ${status.version} 已是最新版本。`;
-    if (status.state === "downloading") elements.updateStatus.textContent = `正在下载更新… ${status.percent}%`;
-    if (status.state === "downloaded") elements.updateStatus.textContent = `${status.version} 已下载；点击“检查更新”可立即安装。`;
-    if (status.state === "error") elements.updateStatus.textContent = `自动更新失败：${status.message}`;
+    setUpdateStatus({
+      ...status,
+      state: status.state === "checking" ? "checking-auto"
+        : status.state === "available" ? "available-auto"
+          : status.state,
+      installPrompt: status.state === "downloaded",
+    });
   });
   loadDesktopSettings().catch((error) => {
     elements.desktopSettingsSummary.textContent = tr("无法读取桌面设置", "Unable to read desktop settings");

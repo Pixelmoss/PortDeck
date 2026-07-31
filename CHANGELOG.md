@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.0 - 2026-08-01
+
+### Added
+
+- Instant, persistent Chinese/English switching from Desktop Settings
+- Shared desktop localization for the macOS menu bar, application menu, notifications and update prompts
+- Automated coverage for both desktop locales and localized tray actions
+- Release manifests and SHA-256 checksums generated automatically by the signed release workflow
+- Automated DMG and ZIP size reporting with architecture-specific release budgets
+- An unsigned Apple Silicon package-size gate in the main CI workflow
+- Signed ARM64, x64 and universal package-size gates in the release workflow
+- Bundle-size baseline, optimization policy and regression guidance
+- An isolated `PORTDECK_USER_DATA_DIR` override for safe packaged-app QA
+
+### Changed
+
+- Dynamic scan, diagnostics and update status text now re-renders immediately after a language change
+- Update failures now use concise localized messages without exposing raw response headers
+- The Edit, View and Window application menus now follow the selected language
+- Keep only the English and Simplified Chinese Electron locale resources
+- Use maximum archive compression for distributable packages
+- Exclude source maps, Markdown documents and test directories from the packaged application
+- Updated the product version from 1.5.0 to 2.0.0
+
+### Size target
+
+- ARM64 artifacts must remain below 100 MiB for DMG and 110 MiB for ZIP
+- x64 artifacts must remain below 105/115 MiB and universal artifacts below 165/180 MiB for DMG/ZIP
+- Larger reductions remain tied to replacing the Electron runtime with native Swift capabilities
+
 ## 1.5.0 - 2026-07-31
 
 ### Added

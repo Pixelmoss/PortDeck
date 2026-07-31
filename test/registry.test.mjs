@@ -72,6 +72,9 @@ test("ServiceRegistry stores workspaces, preferences, audit history and import/e
   assert.equal(snapshot.services[0].favorite, true);
   assert.deepEqual(snapshot.services[0].tags, ["api", "important"]);
   assert.equal(registry.getPreferences().locale, "en-US");
+
+  await registry.updatePreferences({ locale: "zh-CN" });
+  assert.equal(registry.getPreferences().locale, "zh-CN");
   assert.equal(registry.listAudit()[0].action, "stop");
   assert.equal(registry.listAudit()[0].outcome, "blocked");
 

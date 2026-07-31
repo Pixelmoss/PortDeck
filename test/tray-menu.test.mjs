@@ -18,6 +18,22 @@ test("traySummaryLabel includes conflicts only when present", () => {
   assert.equal(traySummaryLabel({ running: 2, managed: 3, unhealthy: 1 }), "2 运行中 · 3 受管 · 1 异常");
 });
 
+test("tray menu supports English labels", () => {
+  assert.equal(
+    traySummaryLabel({ running: 2, managed: 3, conflicts: 1, unhealthy: 1 }, "en-US"),
+    "2 running · 3 managed · 1 conflict · 1 unhealthy",
+  );
+  const template = buildTrayMenuTemplate({
+    locale: "en-US",
+    handlers: handlers([]),
+    canOpenAtLogin: false,
+  });
+  assert.ok(template.some((item) => item.label === "No services are running"));
+  assert.ok(template.some((item) => item.label === "Scan now"));
+  assert.ok(template.some((item) => item.label === "Quit PortDeck"));
+  assert.match(template.find((item) => item.type === "checkbox").label, /packaged app/);
+});
+
 test("tray menu exposes running and offline managed service actions", () => {
   const events = [];
   const template = buildTrayMenuTemplate({

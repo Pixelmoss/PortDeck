@@ -28,7 +28,7 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
 
       - name: Generate CycloneDX SBOM
-        run: npm sbom --sbom-format cyclonedx > PortDeck-${{ github.ref_name }}-sbom.cdx.json
+        run: npm run security:sbom:file -- .
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
@@ -83,6 +83,9 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Enforce package size budget
+        run: npm run size:check -- --arch=${{ matrix.arch }}
+
       - name: Verify signature, Gatekeeper and notarization ticket
         run: npm run desktop:verify -- "$(find release -maxdepth 2 -name PortDeck.app -print -quit)"
 
@@ -109,15 +112,28 @@ jobs:
     needs: [security, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release
           merge-multiple: true
+
+      - name: Generate release manifest and checksums
+        run: |
+          npm run release:manifest
+          npm run release:checksums
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
-          generate_release_notes: true
+          files: release/*
+          body_path: docs/releases/${{ github.ref_name }}.md
           fail_on_unmatched_files: true

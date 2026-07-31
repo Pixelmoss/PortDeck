@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("portdeckDesktop", Object.freeze({
   }),
   getSettings: () => ipcRenderer.invoke("desktop:get-settings"),
   setOpenAtLogin: (enabled) => ipcRenderer.invoke("desktop:set-open-at-login", enabled),
+  setLocale: (locale) => ipcRenderer.invoke("desktop:set-locale", locale),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-for-updates"),
   downloadUpdate: () => ipcRenderer.invoke("desktop:download-update"),
   installUpdate: () => ipcRenderer.invoke("desktop:install-update"),

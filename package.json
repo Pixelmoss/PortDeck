@@ -1,6 +1,6 @@
 {
   "name": "portdeck",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "private": true,
   "author": "PortDeck",
   "description": "A local-first dashboard for discovering and managing development services.",
@@ -17,8 +17,12 @@
     "desktop:build:x64": "node scripts/build-macos.mjs --x64",
     "desktop:build:universal": "node scripts/build-macos.mjs --universal",
     "desktop:verify": "node scripts/verify-macos-release.mjs",
+    "desktop:verify:bundle": "node scripts/verify-macos-bundle.mjs",
+    "size:check": "node scripts/check-bundle-size.mjs",
     "release:manifest": "node scripts/generate-release-manifest.mjs",
+    "release:checksums": "node scripts/generate-checksums.mjs",
     "security:sbom": "npm sbom --sbom-format cyclonedx",
+    "security:sbom:file": "node scripts/generate-sbom.mjs",
     "native:build": "swift build --package-path native/PortDeckNative",
     "native:pack": "node scripts/build-native-app.mjs"
   },
@@ -29,6 +33,11 @@
     "appId": "io.portdeck.app",
     "productName": "PortDeck",
     "asar": true,
+    "compression": "maximum",
+    "electronLanguages": [
+      "en",
+      "zh_CN"
+    ],
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
@@ -39,7 +48,10 @@
       "server/**/*",
       "web/**/*",
       "package.json",
-      "!**/._*"
+      "!**/._*",
+      "!**/*.map",
+      "!**/*.{md,markdown}",
+      "!**/{test,tests,__tests__}/**"
     ],
     "publish": [
       {

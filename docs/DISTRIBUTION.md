@@ -1,6 +1,6 @@
 # PortDeck distribution readiness
 
-PortDeck 1.5 contains the code and CI paths required for public macOS distribution. The remaining signing authority must come from the product owner's Apple Developer account.
+PortDeck 2.0 contains the code and CI paths required for public macOS distribution, including package-size regression gates, localized desktop surfaces, release manifests and checksums. The remaining signing authority must come from the product owner's Apple Developer account.
 
 ## Required Apple setup
 

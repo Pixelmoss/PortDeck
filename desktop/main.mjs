@@ -15,6 +15,7 @@ import {
 import electronUpdater from "electron-updater";
 import { startPortDeckServer } from "../server/app.mjs";
 import { buildLoginItemSettings, desktopSettingsSnapshot, isHiddenLaunch } from "./lib/startup.mjs";
+import { desktopText, normalizeLocale } from "./lib/i18n.mjs";
 import { buildTrayMenuTemplate } from "./lib/tray-menu.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,8 @@ const DEFAULT_PORT = Number(process.env.PORTDECK_PORT || 4399);
 const { autoUpdater } = electronUpdater;
 
 app.setName(APP_NAME);
-app.setPath("userData", path.join(app.getPath("appData"), APP_NAME));
+const userDataOverride = process.env.PORTDECK_USER_DATA_DIR?.trim();
+app.setPath("userData", userDataOverride ? path.resolve(userDataOverride) : path.join(app.getPath("appData"), APP_NAME));
 
 let mainWindow = null;
 let tray = null;
@@ -33,6 +35,7 @@ let updateCheckTimer = null;
 let isQuitting = false;
 let startedHidden = false;
 let crashReporterStarted = false;
+let currentLocale = "zh-CN";
 const healthStates = new Map();
 const notificationTimes = new Map();
 
@@ -84,6 +87,13 @@ function notify(title, body) {
   new Notification({ title, body, silent: true }).show();
 }
 
+function setDesktopLocale(locale) {
+  currentLocale = normalizeLocale(locale);
+  createApplicationMenu();
+  refreshTrayMenu();
+  return { locale: currentLocale };
+}
+
 function versionParts(value) {
   return String(value || "0").replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
 }
@@ -108,10 +118,18 @@ async function checkForUpdates() {
       latestVersion,
     };
   }
-  const response = await fetch("https://api.github.com/repos/Pixelmoss/PortDeck/releases/latest", {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": `PortDeck/${app.getVersion()}` },
-  });
-  if (!response.ok) throw new Error(`GitHub update check failed (HTTP ${response.status})`);
+  let response;
+  try {
+    response = await fetch("https://api.github.com/repos/Pixelmoss/PortDeck/releases/latest", {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": `PortDeck/${app.getVersion()}` },
+    });
+  } catch {
+    throw new Error(desktopText(currentLocale, "updateCheckFailed"));
+  }
+  if (!response.ok) {
+    const key = response.status === 404 ? "updateSourceUnavailable" : "updateCheckFailed";
+    throw new Error(desktopText(currentLocale, key));
+  }
   const release = await response.json();
   const latestVersion = String(release.tag_name || "").replace(/^v/, "");
   return {
@@ -140,12 +158,22 @@ function initializeAutoUpdater() {
   autoUpdater.on("checking-for-update", () => sendUpdateStatus({ state: "checking" }));
   autoUpdater.on("update-available", (info) => {
     sendUpdateStatus({ state: "available", version: info.version });
-    notify("PortDeck · 有新版本", `PortDeck ${info.version} 已可下载，安装前会再次询问你。`);
+    notify(
+      desktopText(currentLocale, "updateAvailableTitle"),
+      desktopText(currentLocale, "updateAvailableBody", { version: info.version }),
+    );
   });
   autoUpdater.on("update-not-available", () => sendUpdateStatus({ state: "current", version: app.getVersion() }));
   autoUpdater.on("download-progress", (progress) => sendUpdateStatus({ state: "downloading", percent: Math.round(progress.percent || 0) }));
   autoUpdater.on("update-downloaded", (info) => sendUpdateStatus({ state: "downloaded", version: info.version }));
-  autoUpdater.on("error", (error) => sendUpdateStatus({ state: "error", message: error.message }));
+  autoUpdater.on("error", (error) => {
+    console.error("Automatic update failed:", error);
+    const unavailable = /(?:404|releases\.atom|not found)/i.test(String(error?.message || ""));
+    sendUpdateStatus({
+      state: "error",
+      message: desktopText(currentLocale, unavailable ? "updateSourceUnavailable" : "updateCheckFailed"),
+    });
+  });
   updateCheckTimer = setTimeout(() => {
     autoUpdater.checkForUpdates().catch((error) => console.error("Automatic update check failed:", error));
   }, 15_000);
@@ -165,8 +193,8 @@ function notifyHealthTransitions(services, preferences = {}) {
     if (now - (notificationTimes.get(key) || 0) < 60_000) continue;
     notificationTimes.set(key, now);
     notify(
-      next === "unhealthy" ? "PortDeck · 服务健康异常" : "PortDeck · 服务已经恢复",
-      next === "unhealthy" ? `「${service.name}」健康检查失败` : `「${service.name}」已恢复正常响应`,
+      desktopText(currentLocale, next === "unhealthy" ? "healthFailureTitle" : "healthRecoveryTitle"),
+      desktopText(currentLocale, next === "unhealthy" ? "healthFailureBody" : "healthRecoveryBody", { name: service.name }),
     );
   }
 }
@@ -247,7 +275,13 @@ async function runTrayAction(service, action) {
     const riskPayload = await riskResponse.json().catch(() => ({}));
     if (!riskResponse.ok) throw new Error(riskPayload.error || `HTTP ${riskResponse.status}`);
     if (riskPayload.risk?.requiresAcknowledgement) {
-      notify("PortDeck · 需要风险确认", `请在主窗口确认「${service.name}」的${action === "stop" ? "停止" : action === "start" ? "启动" : "重启"}命令`);
+      notify(
+        desktopText(currentLocale, "riskConfirmationTitle"),
+        desktopText(currentLocale, "riskConfirmationBody", {
+          name: service.name,
+          action: desktopText(currentLocale, action === "stop" ? "actionStop" : action === "start" ? "actionStart" : "actionRestart"),
+        }),
+      );
       showMainWindow();
       return;
     }
@@ -258,13 +292,9 @@ async function runTrayAction(service, action) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    notify("PortDeck", action === "start"
-      ? `已启动「${service.name}」`
-      : action === "stop"
-        ? `已发送「${service.name}」的停止信号`
-        : `正在重启「${service.name}」`);
+    notify("PortDeck", desktopText(currentLocale, action === "start" ? "startedBody" : action === "stop" ? "stoppedBody" : "restartingBody", { name: service.name }));
   } catch (error) {
-    notify("PortDeck 操作失败", error.message);
+    notify(desktopText(currentLocale, "operationFailedTitle"), error.message);
     showMainWindow();
   } finally {
     setTimeout(refreshTrayMenu, 750);
@@ -277,12 +307,14 @@ async function refreshTrayMenu() {
   notifyHealthTransitions(services, preferences);
   const settings = getDesktopSettings();
 
-  tray.setToolTip(`PortDeck · ${summary.running || 0} 个服务运行中`);
+  currentLocale = normalizeLocale(preferences?.locale || currentLocale);
+  tray.setToolTip(desktopText(currentLocale, "runningTooltip", { count: summary.running || 0 }));
   tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate({
     services,
     summary,
     openAtLogin: settings.openAtLogin,
     canOpenAtLogin: settings.canOpenAtLogin,
+    locale: currentLocale,
     handlers: {
       openUrl: (url) => shell.openExternal(url),
       showWindow: showMainWindow,
@@ -303,38 +335,58 @@ function createTray() {
 
 function createApplicationMenu() {
   const settings = getDesktopSettings();
+  const label = (key) => desktopText(currentLocale, key);
   const template = [
     {
       label: APP_NAME,
       submenu: [
         { role: "about" },
         { type: "separator" },
-        { label: "打开 PortDeck", accelerator: "CommandOrControl+Shift+P", click: showMainWindow },
+        { label: desktopText(currentLocale, "openPortDeck"), accelerator: "CommandOrControl+Shift+P", click: showMainWindow },
         {
-          label: settings.canOpenAtLogin ? "登录时静默启动" : "登录时启动（打包后可用）",
+          label: desktopText(currentLocale, settings.canOpenAtLogin ? "launchAtLogin" : "launchAtLoginUnavailable"),
           type: "checkbox",
           checked: settings.openAtLogin,
           enabled: settings.canOpenAtLogin,
           click: (menuItem) => setOpenAtLogin(menuItem.checked),
         },
         { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
+        { role: "hide", label: label("hidePortDeck") },
+        { role: "hideOthers", label: label("hideOthers") },
+        { role: "unhide", label: label("showAll") },
         { type: "separator" },
         { role: "quit" },
       ],
     },
-    { role: "editMenu" },
     {
-      label: "显示",
+      label: label("editMenu"),
       submenu: [
-        { role: "reload" },
-        { role: "togglefullscreen" },
-        ...(app.isPackaged ? [] : [{ role: "toggleDevTools" }]),
+        { role: "undo", label: label("undo") },
+        { role: "redo", label: label("redo") },
+        { type: "separator" },
+        { role: "cut", label: label("cut") },
+        { role: "copy", label: label("copy") },
+        { role: "paste", label: label("paste") },
+        { role: "selectAll", label: label("selectAll") },
       ],
     },
-    { role: "windowMenu" },
+    {
+      label: label("displayMenu"),
+      submenu: [
+        { role: "reload", label: label("reload") },
+        { role: "togglefullscreen", label: label("toggleFullscreen") },
+        ...(app.isPackaged ? [] : [{ role: "toggleDevTools", label: label("developerTools") }]),
+      ],
+    },
+    {
+      label: label("windowMenu"),
+      submenu: [
+        { role: "minimize", label: label("minimize") },
+        { role: "zoom", label: label("zoom") },
+        { type: "separator" },
+        { role: "close", label: label("closeWindow") },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -345,14 +397,15 @@ function registerDesktopIpc() {
     if (typeof enabled !== "boolean") throw new TypeError("openAtLogin must be a boolean");
     return setOpenAtLogin(enabled);
   });
+  ipcMain.handle("desktop:set-locale", (_event, locale) => setDesktopLocale(locale));
   ipcMain.handle("desktop:check-for-updates", () => checkForUpdates());
   ipcMain.handle("desktop:download-update", async () => {
-    if (!canUseAutomaticUpdater()) throw new Error("自动下载只在正式安装包中可用");
+    if (!canUseAutomaticUpdater()) throw new Error(desktopText(currentLocale, "automaticDownloadUnavailable"));
     await autoUpdater.downloadUpdate();
     return { ok: true };
   });
   ipcMain.handle("desktop:install-update", () => {
-    if (!canUseAutomaticUpdater()) throw new Error("自动安装只在正式安装包中可用");
+    if (!canUseAutomaticUpdater()) throw new Error(desktopText(currentLocale, "automaticInstallUnavailable"));
     setImmediate(() => autoUpdater.quitAndInstall(false, true));
     return { ok: true };
   });
@@ -372,6 +425,7 @@ async function startApplication() {
     allowPortFallback: true,
   });
   const preferences = backend.registry.getPreferences();
+  currentLocale = normalizeLocale(preferences.locale);
   if (preferences.crashReportingEnabled && !crashReporterStarted) {
     crashReporter.start({ companyName: "PortDeck", productName: "PortDeck", uploadToServer: false });
     crashReporterStarted = true;
