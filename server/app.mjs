@@ -64,7 +64,7 @@ export async function startPortDeckServer({
   port = 4399,
   dataRoot = path.join(ROOT, "data"),
   webRoot = DEFAULT_WEB_ROOT,
-  version = "0.2.0",
+  version = "0.3.0",
   allowPortFallback = false,
   scanner = scanListeningServices,
   logger = console,

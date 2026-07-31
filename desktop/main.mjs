@@ -3,12 +3,16 @@ import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
+  ipcMain,
   Menu,
   nativeImage,
+  Notification,
   shell,
   Tray,
 } from "electron";
 import { startPortDeckServer } from "../server/app.mjs";
+import { buildLoginItemSettings, desktopSettingsSnapshot, isHiddenLaunch } from "./lib/startup.mjs";
+import { buildTrayMenuTemplate } from "./lib/tray-menu.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_NAME = "PortDeck";
@@ -22,12 +26,14 @@ let tray = null;
 let backend = null;
 let trayRefreshTimer = null;
 let isQuitting = false;
+let startedHidden = false;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  app.dock?.show();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -35,8 +41,39 @@ function showMainWindow() {
 
 function toggleMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isVisible() && mainWindow.isFocused()) mainWindow.hide();
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+    app.dock?.hide();
+  }
   else showMainWindow();
+}
+
+function getDesktopSettings() {
+  return desktopSettingsSnapshot({
+    appVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+    loginItemSettings: app.getLoginItemSettings(),
+    startedHidden,
+  });
+}
+
+function broadcastDesktopSettings() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("desktop:settings-changed", getDesktopSettings());
+}
+
+function setOpenAtLogin(enabled) {
+  if (!app.isPackaged) return getDesktopSettings();
+  app.setLoginItemSettings(buildLoginItemSettings(enabled));
+  createApplicationMenu();
+  broadcastDesktopSettings();
+  refreshTrayMenu();
+  return getDesktopSettings();
+}
+
+function notify(title, body) {
+  if (!Notification.isSupported()) return;
+  new Notification({ title, body, silent: true }).show();
 }
 
 function isInternalUrl(rawUrl) {
@@ -48,7 +85,7 @@ function isInternalUrl(rawUrl) {
   }
 }
 
-function createMainWindow() {
+function createMainWindow({ showOnReady = true } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -83,9 +120,12 @@ function createMainWindow() {
     if (isQuitting) return;
     event.preventDefault();
     mainWindow.hide();
+    app.dock?.hide();
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.once("ready-to-show", () => {
+    if (showOnReady) showMainWindow();
+  });
   mainWindow.loadURL(backend.url);
 }
 
@@ -106,40 +146,46 @@ async function readServiceSummary() {
   }
 }
 
+async function runTrayAction(service, action) {
+  try {
+    const response = await fetch(`${backend.url}/api/services/${encodeURIComponent(service.id)}/${action}`, {
+      method: "POST",
+      headers: { Origin: new URL(backend.url).origin },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    notify("PortDeck", action === "start"
+      ? `已启动「${service.name}」`
+      : action === "stop"
+        ? `已发送「${service.name}」的停止信号`
+        : `正在重启「${service.name}」`);
+  } catch (error) {
+    notify("PortDeck 操作失败", error.message);
+    showMainWindow();
+  } finally {
+    setTimeout(refreshTrayMenu, 750);
+  }
+}
+
 async function refreshTrayMenu() {
   if (!tray || tray.isDestroyed()) return;
   const { services, summary } = await readServiceSummary();
-  const runningServices = services.filter((service) => service.status === "running").slice(0, 6);
-  const openAtLogin = app.getLoginItemSettings().openAtLogin;
-
-  const serviceItems = runningServices.length
-    ? runningServices.map((service) => ({
-        label: `${service.name}${service.port ? `  :${service.port}` : ""}`,
-        click: () => service.url ? shell.openExternal(service.url) : showMainWindow(),
-      }))
-    : [{ label: "当前没有运行中的服务", enabled: false }];
+  const settings = getDesktopSettings();
 
   tray.setToolTip(`PortDeck · ${summary.running || 0} 个服务运行中`);
-  tray.setContextMenu(Menu.buildFromTemplate([
-    {
-      label: `${summary.running || 0} 运行中 · ${summary.managed || 0} 受管${summary.conflicts ? ` · ${summary.conflicts} 冲突` : ""}`,
-      enabled: false,
+  tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate({
+    services,
+    summary,
+    openAtLogin: settings.openAtLogin,
+    canOpenAtLogin: settings.canOpenAtLogin,
+    handlers: {
+      openUrl: (url) => shell.openExternal(url),
+      showWindow: showMainWindow,
+      runAction: runTrayAction,
+      refresh: refreshTrayMenu,
+      setOpenAtLogin,
     },
-    { type: "separator" },
-    ...serviceItems,
-    { type: "separator" },
-    { label: "打开 PortDeck", accelerator: "CommandOrControl+Shift+P", click: showMainWindow },
-    { label: "重新扫描", click: refreshTrayMenu },
-    {
-      label: app.isPackaged ? "登录时启动" : "登录时启动（打包后可用）",
-      type: "checkbox",
-      checked: openAtLogin,
-      enabled: app.isPackaged,
-      click: (menuItem) => app.setLoginItemSettings({ openAtLogin: menuItem.checked }),
-    },
-    { type: "separator" },
-    { label: "退出 PortDeck", role: "quit" },
-  ]));
+  })));
 }
 
 function createTray() {
@@ -151,6 +197,7 @@ function createTray() {
 }
 
 function createApplicationMenu() {
+  const settings = getDesktopSettings();
   const template = [
     {
       label: APP_NAME,
@@ -158,6 +205,13 @@ function createApplicationMenu() {
         { role: "about" },
         { type: "separator" },
         { label: "打开 PortDeck", accelerator: "CommandOrControl+Shift+P", click: showMainWindow },
+        {
+          label: settings.canOpenAtLogin ? "登录时静默启动" : "登录时启动（打包后可用）",
+          type: "checkbox",
+          checked: settings.openAtLogin,
+          enabled: settings.canOpenAtLogin,
+          click: (menuItem) => setOpenAtLogin(menuItem.checked),
+        },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },
@@ -180,8 +234,20 @@ function createApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function registerDesktopIpc() {
+  ipcMain.handle("desktop:get-settings", () => getDesktopSettings());
+  ipcMain.handle("desktop:set-open-at-login", (_event, enabled) => {
+    if (typeof enabled !== "boolean") throw new TypeError("openAtLogin must be a boolean");
+    return setOpenAtLogin(enabled);
+  });
+}
+
 async function startApplication() {
   const userData = app.getPath("userData");
+  startedHidden = isHiddenLaunch({
+    wasOpenedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
+    argv: process.argv,
+  });
   backend = await startPortDeckServer({
     host: "127.0.0.1",
     port: DEFAULT_PORT,
@@ -189,9 +255,14 @@ async function startApplication() {
     version: app.getVersion(),
     allowPortFallback: true,
   });
+  registerDesktopIpc();
   createApplicationMenu();
-  createMainWindow();
+  createMainWindow({ showOnReady: !startedHidden });
   createTray();
+  if (startedHidden) {
+    app.dock?.hide();
+    console.log("PortDeck started in menu-bar-only mode");
+  }
 }
 
 app.on("second-instance", () => showMainWindow());

@@ -5,6 +5,7 @@ const state = {
   query: "",
   loading: true,
   acting: new Set(),
+  desktop: null,
 };
 
 if (window.portdeckDesktop) document.documentElement.classList.add("desktop-shell");
@@ -25,6 +26,12 @@ const elements = {
   logContent: document.querySelector("#logContent"),
   drawerBackdrop: document.querySelector("#drawerBackdrop"),
   toastRegion: document.querySelector("#toastRegion"),
+  desktopSettingsButton: document.querySelector("#desktopSettingsButton"),
+  desktopSettingsSummary: document.querySelector("#desktopSettingsSummary"),
+  desktopSettingsDialog: document.querySelector("#desktopSettingsDialog"),
+  openAtLoginToggle: document.querySelector("#openAtLoginToggle"),
+  openAtLoginDescription: document.querySelector("#openAtLoginDescription"),
+  desktopVersion: document.querySelector("#desktopVersion"),
 };
 
 const FILTER_LABELS = {
@@ -216,6 +223,26 @@ function toast(message, type = "success") {
   setTimeout(() => node.remove(), 3500);
 }
 
+function applyDesktopSettings(settings) {
+  state.desktop = settings;
+  elements.desktopSettingsSummary.textContent = settings.openAtLogin
+    ? "已开启登录时静默启动"
+    : "未开启登录时启动";
+  elements.openAtLoginToggle.checked = settings.openAtLogin;
+  elements.openAtLoginToggle.disabled = !settings.canOpenAtLogin;
+  elements.desktopVersion.textContent = settings.version;
+  elements.openAtLoginDescription.textContent = settings.canOpenAtLogin
+    ? "开机后只显示菜单栏图标，不弹出主窗口。"
+    : "开发模式不会修改 macOS 登录项，请在打包应用中设置。";
+}
+
+async function loadDesktopSettings() {
+  if (!window.portdeckDesktop?.getSettings) return null;
+  const settings = await window.portdeckDesktop.getSettings();
+  applyDesktopSettings(settings);
+  return settings;
+}
+
 function findService(id) {
   return state.services.find((service) => service.id === id);
 }
@@ -336,6 +363,36 @@ elements.add.addEventListener("click", () => openServiceDialog());
 document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => elements.dialog.close()));
 document.querySelector("#closeLogButton").addEventListener("click", closeLogs);
 elements.drawerBackdrop.addEventListener("click", closeLogs);
+
+if (window.portdeckDesktop) {
+  elements.desktopSettingsButton.addEventListener("click", async () => {
+    try {
+      await loadDesktopSettings();
+      elements.desktopSettingsDialog.showModal();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  document.querySelectorAll("[data-close-desktop-settings]").forEach((button) => {
+    button.addEventListener("click", () => elements.desktopSettingsDialog.close());
+  });
+  elements.openAtLoginToggle.addEventListener("change", async () => {
+    const enabled = elements.openAtLoginToggle.checked;
+    elements.openAtLoginToggle.disabled = true;
+    try {
+      applyDesktopSettings(await window.portdeckDesktop.setOpenAtLogin(enabled));
+      toast(enabled ? "已开启登录时静默启动" : "已关闭登录时启动");
+    } catch (error) {
+      await loadDesktopSettings().catch(() => {});
+      toast(error.message, "error");
+    }
+  });
+  window.portdeckDesktop.onSettingsChanged(applyDesktopSettings);
+  loadDesktopSettings().catch((error) => {
+    elements.desktopSettingsSummary.textContent = "无法读取桌面设置";
+    console.error(error);
+  });
+}
 
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();

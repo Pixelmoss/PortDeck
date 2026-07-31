@@ -12,7 +12,7 @@ test("startPortDeckServer can be embedded on a dynamic port", async (t) => {
     instance = await startPortDeckServer({
       port: 0,
       dataRoot,
-      version: "0.2.0-test",
+      version: "0.3.0-test",
       scanner: async () => [],
       logger: { log() {}, error() {} },
     });
@@ -25,7 +25,7 @@ test("startPortDeckServer can be embedded on a dynamic port", async (t) => {
   assert.ok(instance.port > 0);
   const health = await fetch(`${instance.url}/api/health`).then((response) => response.json());
   assert.equal(health.ok, true);
-  assert.equal(health.version, "0.2.0-test");
+  assert.equal(health.version, "0.3.0-test");
 
   const html = await fetch(instance.url).then((response) => response.text());
   assert.match(html, /PortDeck · 本地服务控制台/);

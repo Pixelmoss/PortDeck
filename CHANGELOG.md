@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 - 2026-07-31
+
+### Added
+
+- Menu bar actions for opening, starting, stopping, and restarting services
+- Quiet login launch that keeps the main window and Dock icon hidden
+- Desktop settings dialog with login-launch status synchronized through Electron IPC
+- Native macOS notifications after menu bar service actions
+- Unit coverage for startup settings and tray menu generation
+
+### Changed
+
+- Expanded the application menu with a synchronized login-launch toggle
+- Updated the product version from 0.2.0 to 0.3.0
+- Expanded the automated test suite from 8 to 14 tests
+
+### Known limitations
+
+- The 0.3 test build is unsigned and not notarized
+- The public product icon is not yet included
+- ASAR remains disabled for builds made from the current external volume
+
 ## 0.2.0 - 2026-07-31
 
 ### Added
