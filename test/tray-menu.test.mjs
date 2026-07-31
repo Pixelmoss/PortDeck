@@ -15,6 +15,7 @@ function handlers(events) {
 test("traySummaryLabel includes conflicts only when present", () => {
   assert.equal(traySummaryLabel({ running: 2, managed: 3 }), "2 运行中 · 3 受管");
   assert.equal(traySummaryLabel({ running: 2, managed: 3, conflicts: 1 }), "2 运行中 · 3 受管 · 1 冲突");
+  assert.equal(traySummaryLabel({ running: 2, managed: 3, unhealthy: 1 }), "2 运行中 · 3 受管 · 1 异常");
 });
 
 test("tray menu exposes running and offline managed service actions", () => {

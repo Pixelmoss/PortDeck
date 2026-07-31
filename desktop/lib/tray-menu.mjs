@@ -1,12 +1,20 @@
 function serviceLabel(service) {
   const port = service.port || service.preferredPort;
-  return `${service.name}${port ? `  :${port}` : ""}`;
+  const health = service.health?.status === "healthy" ? "● "
+    : service.health?.status === "unhealthy" ? "! "
+      : "";
+  return `${health}${service.name}${port ? `  :${port}` : ""}`;
 }
 
 function runningServiceItem(service, handlers) {
   const submenu = [];
   if (service.url) submenu.push({ label: "在浏览器中打开", click: () => handlers.openUrl(service.url) });
   submenu.push({ label: "在 PortDeck 中查看", click: handlers.showWindow });
+  if (service.health?.status === "healthy") {
+    submenu.push({ label: `健康 · ${service.health.latencyMs ?? "-"}ms · HTTP ${service.health.code}`, enabled: false });
+  } else if (service.health?.status === "unhealthy") {
+    submenu.push({ label: `健康异常 · ${service.health.error || "无响应"}`, enabled: false });
+  }
   submenu.push({ type: "separator" });
   if (service.source === "managed") {
     submenu.push({ label: "重启服务", click: () => handlers.runAction(service, "restart") });
@@ -28,6 +36,7 @@ export function traySummaryLabel(summary = {}) {
     `${summary.managed || 0} 受管`,
   ];
   if (summary.conflicts) parts.push(`${summary.conflicts} 冲突`);
+  if (summary.unhealthy) parts.push(`${summary.unhealthy} 异常`);
   return parts.join(" · ");
 }
 

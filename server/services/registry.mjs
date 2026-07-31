@@ -11,6 +11,10 @@ function validatePort(value) {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
+function validateProtocol(value, fallback = "http") {
+  return value === "https" ? "https" : value === "http" ? "http" : fallback;
+}
+
 export function sanitizeService(input, existing = {}) {
   const name = cleanString(input.name, 120) || existing.name || "Untitled service";
   const preferredPort = validatePort(input.preferredPort ?? input.port ?? existing.preferredPort);
@@ -24,7 +28,9 @@ export function sanitizeService(input, existing = {}) {
     startCommand: cleanString(input.startCommand) || existing.startCommand || "",
     stopCommand: cleanString(input.stopCommand) || existing.stopCommand || "",
     preferredPort,
+    protocol: validateProtocol(input.protocol, existing.protocol || "http"),
     healthPath: cleanString(input.healthPath, 240) || existing.healthPath || "/",
+    healthCheckEnabled: Boolean(input.healthCheckEnabled ?? existing.healthCheckEnabled ?? true),
     notes: cleanString(input.notes, 2000) || existing.notes || "",
     autoRestart: Boolean(input.autoRestart ?? existing.autoRestart),
     lastPid: Number(input.lastPid ?? existing.lastPid) || null,
@@ -42,7 +48,15 @@ export class ServiceRegistry {
   async load() {
     try {
       const data = JSON.parse(await readFile(this.filePath, "utf8"));
-      this.services = Array.isArray(data.services) ? data.services : [];
+      this.services = Array.isArray(data.services)
+        ? data.services.map((service) => ({
+          ...service,
+          protocol: validateProtocol(service.protocol),
+          healthPath: cleanString(service.healthPath, 240) || "/",
+          healthCheckEnabled: service.healthCheckEnabled !== false,
+          autoRestart: Boolean(service.autoRestart),
+        }))
+        : [];
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       this.services = [];
@@ -79,7 +93,7 @@ export class ServiceRegistry {
   async save() {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     const tempPath = `${this.filePath}.${process.pid}.tmp`;
-    await writeFile(tempPath, JSON.stringify({ version: 1, services: this.services }, null, 2));
+    await writeFile(tempPath, JSON.stringify({ version: 2, services: this.services }, null, 2));
     await rename(tempPath, this.filePath);
   }
 }

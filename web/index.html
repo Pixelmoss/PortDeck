@@ -32,6 +32,9 @@
           <button class="nav-item" data-filter="offline">
             <span class="nav-icon status-offline">●</span><span>已离线</span>
           </button>
+          <button class="nav-item" data-filter="unhealthy">
+            <span class="nav-icon status-unhealthy">!</span><span>健康异常</span><span class="nav-count" data-count="unhealthy">0</span>
+          </button>
         </nav>
 
         <button class="desktop-settings-card" id="desktopSettingsButton" type="button">
@@ -75,15 +78,20 @@
             <div><span>正在运行</span><strong id="runningMetric">0</strong></div>
             <small>个服务在线</small>
           </article>
+          <article class="summary-card accent-cyan">
+            <div class="summary-icon">✓</div>
+            <div><span>健康服务</span><strong id="healthyMetric">0</strong></div>
+            <small>HTTP 检查通过</small>
+          </article>
+          <article class="summary-card accent-red">
+            <div class="summary-icon">!</div>
+            <div><span>健康异常</span><strong id="unhealthyMetric">0</strong></div>
+            <small>超时或响应错误</small>
+          </article>
           <article class="summary-card accent-violet">
             <div class="summary-icon">◆</div>
             <div><span>受管服务</span><strong id="managedMetric">0</strong></div>
-            <small>可一键启停</small>
-          </article>
-          <article class="summary-card accent-cyan">
-            <div class="summary-icon">◇</div>
-            <div><span>新发现</span><strong id="discoveredMetric">0</strong></div>
-            <small>等待纳入管理</small>
+            <small>可靠生命周期管理</small>
           </article>
           <article class="summary-card accent-amber">
             <div class="summary-icon">!</div>
@@ -148,13 +156,30 @@
             <textarea name="stopCommand" rows="2" placeholder="docker compose down"></textarea>
           </label>
           <label class="field">
+            <span>访问协议</span>
+            <select name="protocol">
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+            </select>
+          </label>
+          <label class="field">
             <span>健康检查路径</span>
             <input name="healthPath" value="/" placeholder="/health" />
           </label>
-          <label class="field">
+          <label class="field span-2">
             <span>备注</span>
             <input name="notes" placeholder="可选说明" />
           </label>
+          <div class="service-options span-2">
+            <label class="check-option">
+              <input name="healthCheckEnabled" type="checkbox" checked />
+              <span><strong>HTTP 健康检查</strong><small>检测状态码、响应时间、页面标题和 favicon</small></span>
+            </label>
+            <label class="check-option">
+              <input name="autoRestart" type="checkbox" />
+              <span><strong>异常退出后自动重启</strong><small>只监督由 PortDeck 启动的进程</small></span>
+            </label>
+          </div>
         </div>
         <div class="dialog-actions">
           <button type="button" class="secondary-button" data-close-dialog>取消</button>
@@ -185,7 +210,7 @@
         </div>
         <div class="desktop-about-row">
           <span>当前版本</span>
-          <code id="desktopVersion">0.3.0</code>
+          <code id="desktopVersion">1.0.0</code>
         </div>
         <div class="dialog-actions">
           <button type="button" class="primary-button" data-close-desktop-settings>完成</button>
@@ -195,7 +220,7 @@
 
     <aside class="log-drawer" id="logDrawer" aria-hidden="true">
       <div class="drawer-header">
-        <div><p class="eyebrow">LIVE OUTPUT</p><h2 id="logTitle">运行日志</h2></div>
+        <div><p class="eyebrow">LIVE OUTPUT <span class="live-dot" id="logLiveStatus">连接中</span></p><h2 id="logTitle">运行日志</h2></div>
         <button class="close-button" id="closeLogButton" aria-label="关闭日志">×</button>
       </div>
       <pre id="logContent">暂无日志</pre>

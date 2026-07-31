@@ -7,7 +7,7 @@ const instance = await startPortDeckServer({
   host: "127.0.0.1",
   port: Number(process.env.PORTDECK_PORT || 4399),
   dataRoot: process.env.PORTDECK_DATA_DIR || path.join(root, "data"),
-  version: "0.3.0",
+  version: "1.0.0",
 });
 
 async function shutdown(signal) {

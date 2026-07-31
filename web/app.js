@@ -1,11 +1,13 @@
 const state = {
   services: [],
-  summary: { total: 0, running: 0, managed: 0, discovered: 0, conflicts: 0 },
+  summary: { total: 0, running: 0, managed: 0, discovered: 0, conflicts: 0, healthy: 0, unhealthy: 0 },
   filter: "all",
   query: "",
   loading: true,
   acting: new Set(),
   desktop: null,
+  refreshing: false,
+  logSource: null,
 };
 
 if (window.portdeckDesktop) document.documentElement.classList.add("desktop-shell");
@@ -24,6 +26,7 @@ const elements = {
   logDrawer: document.querySelector("#logDrawer"),
   logTitle: document.querySelector("#logTitle"),
   logContent: document.querySelector("#logContent"),
+  logLiveStatus: document.querySelector("#logLiveStatus"),
   drawerBackdrop: document.querySelector("#drawerBackdrop"),
   toastRegion: document.querySelector("#toastRegion"),
   desktopSettingsButton: document.querySelector("#desktopSettingsButton"),
@@ -40,6 +43,7 @@ const FILTER_LABELS = {
   managed: "受管服务",
   discovered: "自动发现",
   offline: "已离线",
+  unhealthy: "健康异常",
 };
 
 function escapeHtml(value = "") {
@@ -71,7 +75,8 @@ function filteredServices() {
       || (state.filter === "running" && service.status === "running")
       || (state.filter === "managed" && service.source === "managed")
       || (state.filter === "discovered" && service.source === "discovered")
-      || (state.filter === "offline" && service.status === "offline");
+      || (state.filter === "offline" && service.status === "offline")
+      || (state.filter === "unhealthy" && service.health?.status === "unhealthy");
     if (!filterMatch) return false;
 
     const haystack = [service.name, service.kind, service.port, service.command, service.cwd]
@@ -85,7 +90,8 @@ function filteredServices() {
 function renderMetrics() {
   document.querySelector("#runningMetric").textContent = state.summary.running;
   document.querySelector("#managedMetric").textContent = state.summary.managed;
-  document.querySelector("#discoveredMetric").textContent = state.summary.discovered;
+  document.querySelector("#healthyMetric").textContent = state.summary.healthy;
+  document.querySelector("#unhealthyMetric").textContent = state.summary.unhealthy;
   document.querySelector("#conflictMetric").textContent = state.summary.conflicts;
   for (const [key, value] of Object.entries(state.summary)) {
     document.querySelectorAll(`[data-count="${key}"]`).forEach((node) => { node.textContent = value; });
@@ -93,7 +99,7 @@ function renderMetrics() {
 }
 
 function actionButtons(service) {
-  const busy = state.acting.has(service.id) ? " disabled" : "";
+  const busy = state.acting.has(service.id) || service.runtime?.operation === "busy" ? " disabled" : "";
   const buttons = [];
 
   if (service.status === "running" && service.url) {
@@ -117,11 +123,37 @@ function actionButtons(service) {
   return buttons.join("");
 }
 
+function healthBadge(service) {
+  const health = service.health;
+  if (!health || service.status !== "running") return "";
+  if (health.status === "healthy") {
+    const latency = Number.isFinite(health.latencyMs) ? ` ${health.latencyMs}MS` : "";
+    return `<span class="badge health healthy" title="${escapeHtml(health.url)}">HEALTHY${latency}</span>`;
+  }
+  if (health.status === "unhealthy") {
+    return `<span class="badge health unhealthy" title="${escapeHtml(health.error || "健康检查失败")}">UNHEALTHY</span>`;
+  }
+  if (health.status === "disabled") return '<span class="badge health disabled">CHECK OFF</span>';
+  return '<span class="badge health unknown">NO HTTP</span>';
+}
+
+function faviconMarkup(service) {
+  if (!service.health?.faviconUrl || service.health.status !== "healthy") return "";
+  try {
+    const url = new URL(service.health.faviconUrl);
+    if (!["127.0.0.1", "localhost", "::1"].includes(url.hostname)) return "";
+    return `<img src="${escapeHtml(url.href)}" alt="" />`;
+  } catch {
+    return "";
+  }
+}
+
 function renderService(service) {
   const sourceBadge = service.source === "managed"
     ? '<span class="badge managed">MANAGED</span>'
     : '<span class="badge discovered">DISCOVERED</span>';
   const conflictBadge = service.status === "conflict" ? '<span class="badge conflict">CONFLICT</span>' : "";
+  const health = healthBadge(service);
   const port = service.port || service.preferredPort;
   const portClass = service.status === "running" ? "" : " offline";
   const runtime = service.status === "running"
@@ -134,11 +166,11 @@ function renderService(service) {
   return `
     <article class="service-row" data-status="${escapeHtml(service.status)}">
       <div class="service-main">
-        <div class="service-avatar" data-kind="${escapeHtml(service.kind)}">${escapeHtml(initials(service))}</div>
+        <div class="service-avatar" data-kind="${escapeHtml(service.kind)}">${faviconMarkup(service) || escapeHtml(initials(service))}</div>
         <div class="service-copy">
           <div class="service-title">
             <strong title="${escapeHtml(service.name)}">${escapeHtml(service.name)}</strong>
-            ${sourceBadge}${conflictBadge}
+            ${sourceBadge}${conflictBadge}${health}
           </div>
           <div class="service-subtitle" title="${escapeHtml(service.cwd)}">${escapeHtml(shortPath(service.cwd))}</div>
         </div>
@@ -152,7 +184,7 @@ function renderService(service) {
       </div>
       <div class="service-detail">
         <strong title="${escapeHtml(command)}">${escapeHtml(command)}</strong>
-        <div class="service-meta">${escapeHtml(service.url || "本地进程")}</div>
+        <div class="service-meta">${escapeHtml(service.health?.title || service.url || "本地进程")}</div>
       </div>
       <div class="service-actions">${actionButtons(service)}</div>
     </article>`;
@@ -194,6 +226,8 @@ async function api(path, options = {}) {
 }
 
 async function loadServices({ fresh = false, silent = false } = {}) {
+  if (state.refreshing) return;
+  state.refreshing = true;
   if (!silent) {
     state.loading = true;
     elements.refresh.classList.add("spinning");
@@ -209,6 +243,7 @@ async function loadServices({ fresh = false, silent = false } = {}) {
     elements.scanStatus.textContent = "扫描失败";
     toast(error.message, "error");
   } finally {
+    state.refreshing = false;
     state.loading = false;
     elements.refresh.classList.remove("spinning");
     render();
@@ -248,11 +283,14 @@ function findService(id) {
 }
 
 function setFormValues(service = {}) {
-  const fields = ["id", "name", "preferredPort", "kind", "cwd", "startCommand", "stopCommand", "healthPath", "notes"];
+  const fields = ["id", "name", "preferredPort", "kind", "cwd", "startCommand", "stopCommand", "protocol", "healthPath", "notes"];
   for (const name of fields) {
     const input = elements.form.elements.namedItem(name);
     input.value = service[name] ?? "";
   }
+  elements.form.elements.healthCheckEnabled.checked = service.healthCheckEnabled !== false;
+  elements.form.elements.autoRestart.checked = Boolean(service.autoRestart);
+  if (!elements.form.elements.protocol.value) elements.form.elements.protocol.value = "http";
   if (!elements.form.elements.healthPath.value) elements.form.elements.healthPath.value = "/";
 }
 
@@ -266,8 +304,11 @@ function openServiceDialog(service = null, mode = "add") {
       preferredPort: service.port,
       kind: service.kind,
       cwd: service.cwd,
-      startCommand: service.command,
+      startCommand: service.suggestedStartCommand || service.command,
+      protocol: "http",
       healthPath: "/",
+      healthCheckEnabled: true,
+      autoRestart: false,
     });
   } else if (mode === "edit") {
     elements.dialogTitle.textContent = "编辑受管服务";
@@ -276,7 +317,7 @@ function openServiceDialog(service = null, mode = "add") {
   } else {
     elements.dialogTitle.textContent = "添加受管服务";
     elements.dialogEyebrow.textContent = "MANAGED SERVICE";
-    setFormValues({ healthPath: "/" });
+    setFormValues({ protocol: "http", healthPath: "/", healthCheckEnabled: true, autoRestart: false });
   }
   elements.dialog.showModal();
   setTimeout(() => elements.form.elements.name.focus(), 40);
@@ -296,8 +337,12 @@ async function performAction(service, action) {
   state.acting.add(service.id);
   render();
   try {
-    await api(`/api/services/${encodeURIComponent(service.id)}/${action}`, { method: "POST" });
-    toast(action === "start" ? "启动命令已执行" : action === "stop" ? "停止信号已发送" : "服务正在重启");
+    const result = await api(`/api/services/${encodeURIComponent(service.id)}/${action}`, { method: "POST" });
+    toast(action === "start"
+      ? "服务启动命令已执行"
+      : action === "stop"
+        ? result.forced ? "服务无响应，已强制停止" : "服务已安全停止"
+        : "服务已完成重启");
     await new Promise((resolve) => setTimeout(resolve, 500));
     await loadServices({ fresh: true, silent: true });
   } catch (error) {
@@ -309,21 +354,45 @@ async function performAction(service, action) {
 }
 
 async function showLogs(service) {
+  state.logSource?.close();
+  state.logSource = null;
   elements.logTitle.textContent = `${service.name} · 运行日志`;
-  elements.logContent.textContent = "正在读取日志…";
+  elements.logContent.textContent = "正在连接实时日志…";
+  elements.logLiveStatus.textContent = "连接中";
+  elements.logLiveStatus.className = "live-dot connecting";
   elements.logDrawer.classList.add("open");
   elements.drawerBackdrop.classList.add("open");
   elements.logDrawer.setAttribute("aria-hidden", "false");
-  try {
-    const data = await api(`/api/services/${encodeURIComponent(service.id)}/logs`);
-    elements.logContent.textContent = data.logs || "暂无由 PortDeck 启动的日志。";
-    elements.logContent.scrollTop = elements.logContent.scrollHeight;
-  } catch (error) {
-    elements.logContent.textContent = error.message;
-  }
+  const source = new EventSource(`/api/services/${encodeURIComponent(service.id)}/logs/stream`);
+  state.logSource = source;
+  source.addEventListener("open", () => {
+    elements.logLiveStatus.textContent = "实时";
+    elements.logLiveStatus.className = "live-dot connected";
+  });
+  source.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === "reset") elements.logContent.textContent = payload.text || "暂无由 PortDeck 启动的日志。";
+      if (payload.type === "append" && payload.text) {
+        if (elements.logContent.textContent === "正在连接实时日志…" || elements.logContent.textContent === "暂无由 PortDeck 启动的日志。") {
+          elements.logContent.textContent = "";
+        }
+        elements.logContent.textContent += payload.text;
+      }
+      elements.logContent.scrollTop = elements.logContent.scrollHeight;
+    } catch {
+      // Ignore malformed stream events and let EventSource reconnect.
+    }
+  });
+  source.addEventListener("error", () => {
+    elements.logLiveStatus.textContent = "重连中";
+    elements.logLiveStatus.className = "live-dot connecting";
+  });
 }
 
 function closeLogs() {
+  state.logSource?.close();
+  state.logSource = null;
   elements.logDrawer.classList.remove("open");
   elements.drawerBackdrop.classList.remove("open");
   elements.logDrawer.setAttribute("aria-hidden", "true");
@@ -400,6 +469,8 @@ elements.form.addEventListener("submit", async (event) => {
   const id = formData.id;
   delete formData.id;
   formData.preferredPort = formData.preferredPort ? Number(formData.preferredPort) : null;
+  formData.healthCheckEnabled = elements.form.elements.healthCheckEnabled.checked;
+  formData.autoRestart = elements.form.elements.autoRestart.checked;
 
   try {
     await api(id ? `/api/services/${encodeURIComponent(id)}` : "/api/services", {

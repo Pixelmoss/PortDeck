@@ -28,5 +28,7 @@ test("ServiceRegistry persists and reloads services", async () => {
   const reloaded = new ServiceRegistry(filePath);
   await reloaded.load();
   assert.equal(reloaded.find(created.id).name, "Web");
-  assert.match(await readFile(filePath, "utf8"), /"version": 1/);
+  assert.equal(reloaded.find(created.id).healthCheckEnabled, true);
+  assert.equal(reloaded.find(created.id).protocol, "http");
+  assert.match(await readFile(filePath, "utf8"), /"version": 2/);
 });

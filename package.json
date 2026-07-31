@@ -1,6 +1,6 @@
 {
   "name": "portdeck",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "private": true,
   "author": "PortDeck",
   "description": "A local-first dashboard for discovering and managing development services.",
@@ -11,9 +11,12 @@
     "start": "node server/index.mjs",
     "test": "node --test",
     "desktop:dev": "electron .",
-    "desktop:pack": "electron-builder --dir --mac",
-    "desktop:build": "electron-builder --mac",
-    "desktop:build:arm64": "electron-builder --mac --arm64"
+    "desktop:pack": "node scripts/build-macos.mjs --dir",
+    "desktop:build": "node scripts/build-macos.mjs",
+    "desktop:build:arm64": "node scripts/build-macos.mjs --arm64",
+    "desktop:build:x64": "node scripts/build-macos.mjs --x64",
+    "desktop:build:universal": "node scripts/build-macos.mjs --universal",
+    "desktop:verify": "node scripts/verify-macos-release.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -21,7 +24,7 @@
   "build": {
     "appId": "io.portdeck.app",
     "productName": "PortDeck",
-    "asar": false,
+    "asar": true,
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
@@ -36,11 +39,20 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "desktop/resources/icon.icns",
+      "entitlements": "desktop/resources/entitlements.mac.plist",
+      "entitlementsInherit": "desktop/resources/entitlements.mac.inherit.plist",
       "target": [
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "minimumSystemVersion": "12.0.0",
+      "extendInfo": {
+        "NSHumanReadableCopyright": "Copyright © 2026 PortDeck"
+      }
     },
     "dmg": {
       "title": "PortDeck ${version}",

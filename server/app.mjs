@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCatalog } from "./services/catalog.mjs";
+import { ServiceInspector } from "./services/inspector.mjs";
 import { ProcessManager } from "./services/process-manager.mjs";
 import { ServiceRegistry } from "./services/registry.mjs";
 import { scanListeningServices } from "./services/scanner.mjs";
@@ -33,6 +34,8 @@ function summarize(services) {
     managed: services.filter((item) => item.source === "managed").length,
     discovered: services.filter((item) => item.source === "discovered").length,
     conflicts: services.filter((item) => item.status === "conflict").length,
+    healthy: services.filter((item) => item.health?.status === "healthy").length,
+    unhealthy: services.filter((item) => item.health?.status === "unhealthy").length,
   };
 }
 
@@ -64,25 +67,72 @@ export async function startPortDeckServer({
   port = 4399,
   dataRoot = path.join(ROOT, "data"),
   webRoot = DEFAULT_WEB_ROOT,
-  version = "0.3.0",
+  version = "1.0.0",
   allowPortFallback = false,
   scanner = scanListeningServices,
   logger = console,
 } = {}) {
   const registry = new ServiceRegistry(path.join(dataRoot, "services.json"));
   const processManager = new ProcessManager({ logDirectory: path.join(dataRoot, "logs") });
+  const inspector = new ServiceInspector();
   await registry.load();
 
   const startedAt = Date.now();
   let scanCache = { at: 0, services: [] };
   let dashboardPort = port;
+  const activeLogStreams = new Set();
 
   async function getCatalog({ fresh = false } = {}) {
     const now = Date.now();
     if (fresh || now - scanCache.at > 1500) {
       scanCache = { at: now, services: await scanner() };
     }
-    return buildCatalog(registry.list(), scanCache.services, dashboardPort);
+    const catalog = buildCatalog(registry.list(), scanCache.services, dashboardPort)
+      .map((service) => ({ ...service, runtime: processManager.snapshot(service.id) }));
+    return inspector.decorate(catalog, { fresh });
+  }
+
+  async function streamLogs(request, response, serviceId) {
+    if (!registry.find(serviceId)) return sendError(response, 404, "只有受管服务有运行日志");
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    response.write("retry: 1200\n\n");
+    activeLogStreams.add(response);
+    let previous = "";
+    let reading = false;
+
+    const sendUpdate = async () => {
+      if (reading || response.destroyed) return;
+      reading = true;
+      try {
+        const current = await processManager.readLog(serviceId);
+        if (current === previous) return;
+        const payload = current.startsWith(previous)
+          ? { type: "append", text: current.slice(previous.length) }
+          : { type: "reset", text: current };
+        previous = current;
+        response.write(`data: ${JSON.stringify(payload)}\n\n`);
+      } catch (error) {
+        response.write(`event: error\ndata: ${JSON.stringify({ message: error.message })}\n\n`);
+      } finally {
+        reading = false;
+      }
+    };
+
+    await sendUpdate();
+    const interval = setInterval(sendUpdate, 500);
+    interval.unref?.();
+    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
+    heartbeat.unref?.();
+    request.once("close", () => {
+      clearInterval(interval);
+      clearInterval(heartbeat);
+      activeLogStreams.delete(response);
+    });
   }
 
   async function handleApi(request, response, url) {
@@ -107,6 +157,11 @@ export async function startPortDeckServer({
         summary: summarize(services),
         scannedAt: new Date(scanCache.at).toISOString(),
       });
+    }
+
+    const logStreamMatch = url.pathname.match(/^\/api\/services\/([^/]+)\/logs\/stream$/);
+    if (logStreamMatch && request.method === "GET") {
+      return streamLogs(request, response, decodeURIComponent(logStreamMatch[1]));
     }
 
     if (request.method === "POST" && url.pathname === "/api/services") {
@@ -158,26 +213,25 @@ export async function startPortDeckServer({
         const result = await processManager.start(current);
         const service = await registry.upsert({ ...current, lastPid: result.pid }, id);
         scanCache.at = 0;
+        inspector.clear(id);
         return sendJson(response, 202, { ok: true, service, ...result });
       }
 
       if (action === "stop") {
         const result = current.source === "managed"
           ? await processManager.stop(current, current.pid)
-          : processManager.stopDiscovered(current.pid);
+          : await processManager.stopDiscovered(current.pid);
         scanCache.at = 0;
+        inspector.clear(id);
         return sendJson(response, 202, { ok: true, ...result });
       }
 
       if (action === "restart") {
         if (current.source !== "managed") return sendError(response, 400, "只有受管服务可以重启");
-        if (current.status === "running") {
-          await processManager.stop(current, current.pid);
-          await new Promise((resolve) => setTimeout(resolve, 650));
-        }
-        const result = await processManager.start(current);
+        const result = await processManager.restart(current, current.status === "running" ? current.pid : null);
         const service = await registry.upsert({ ...current, lastPid: result.pid }, id);
         scanCache.at = 0;
+        inspector.clear(id);
         return sendJson(response, 202, { ok: true, service, ...result });
       }
     }
@@ -197,7 +251,7 @@ export async function startPortDeckServer({
         "Content-Length": body.length,
         "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=300",
         "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+        "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: http://127.0.0.1:* https://127.0.0.1:* http://localhost:* https://localhost:*; connect-src 'self'; frame-ancestors 'none'",
       });
       if (request.method === "HEAD") return response.end();
       response.end(body);
@@ -243,6 +297,12 @@ export async function startPortDeckServer({
     dataRoot,
     registry,
     processManager,
-    close: () => closeServer(server),
+    inspector,
+    close: async () => {
+      processManager.close();
+      for (const response of activeLogStreams) response.end();
+      activeLogStreams.clear();
+      await closeServer(server);
+    },
   };
 }

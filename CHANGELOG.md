@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.0 - 2026-07-31
+
+### Added
+
+- HTTP/HTTPS health checks with hard timeouts, latency, status code, page title, favicon, and server metadata
+- Smart service recognition from process commands, Node package metadata, Python manifests, and Compose files
+- Suggested portable start commands for discovered services
+- Health summary cards, unhealthy-service filtering, and health indicators in the menu bar
+- Per-service operation locking and reliable detached process-group tracking
+- Graceful SIGTERM shutdown with timed SIGKILL escalation
+- Optional automatic restart after unexpected exits
+- Server-Sent Events endpoint and live log drawer
+- Version 2 service registry schema with backward-compatible migration
+- PortDeck application icon, ASAR packaging, Hardened Runtime entitlements, and release verification script
+- APFS staging build wrapper for repositories stored on external volumes
+- GitHub Actions workflow for signed and notarized ARM64/x64 releases
+
+### Changed
+
+- Updated the product version from 0.3.0 to 1.0.0
+- Expanded the automated test suite from 14 to 32 tests
+- Log tail reads now avoid loading an entire log file into memory
+- Tray summaries now include unhealthy services
+
+### Release requirement
+
+- A public 1.0 build must be signed with a Developer ID Application certificate and notarized by Apple
+- The local build remains an internal test artifact when signing credentials are unavailable
+
 ## 0.3.0 - 2026-07-31
 
 ### Added

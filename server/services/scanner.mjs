@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { classifyService, isLikelyHttp, recognizeService } from "./recognizer.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,19 +54,24 @@ export function parseCwdFields(output) {
 
 async function readCommands(pids) {
   if (!pids.length) return new Map();
-  const { stdout } = await execFileAsync("/bin/ps", [
-    "-ww",
-    "-o",
-    "pid=",
-    "-o",
-    "ppid=",
-    "-o",
-    "etime=",
-    "-o",
-    "command=",
-    "-p",
-    pids.join(","),
-  ]);
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync("/bin/ps", [
+      "-ww",
+      "-o",
+      "pid=",
+      "-o",
+      "ppid=",
+      "-o",
+      "etime=",
+      "-o",
+      "command=",
+      "-p",
+      pids.join(","),
+    ], { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }));
+  } catch (error) {
+    stdout = error.stdout || "";
+  }
 
   const rows = new Map();
   for (const line of stdout.split("\n")) {
@@ -90,7 +96,7 @@ async function readWorkingDirectories(pids) {
       "-p",
       pids.join(","),
       "-Fn",
-    ]);
+    ], { timeout: 3000, maxBuffer: 4 * 1024 * 1024 });
     return parseCwdFields(stdout);
   } catch (error) {
     if (error.stdout) return parseCwdFields(error.stdout);
@@ -98,38 +104,11 @@ async function readWorkingDirectories(pids) {
   }
 }
 
-function classifyService(service) {
-  const haystack = `${service.processName} ${service.command}`.toLowerCase();
-  if (/next-server|next dev|next start/.test(haystack)) return "Next.js";
-  if (/vite/.test(haystack)) return "Vite";
-  if (/nuxt/.test(haystack)) return "Nuxt";
-  if (/astro/.test(haystack)) return "Astro";
-  if (/webpack/.test(haystack)) return "Webpack";
-  if (/uvicorn|fastapi/.test(haystack)) return "FastAPI";
-  if (/flask/.test(haystack)) return "Flask";
-  if (/django|manage\.py runserver/.test(haystack)) return "Django";
-  if (/rails|puma/.test(haystack)) return "Rails";
-  if (/docker|com\.docker/.test(haystack)) return "Docker";
-  if (/python/.test(haystack)) return "Python";
-  if (/node|bun|deno/.test(haystack)) return "Node.js";
-  if (/java/.test(haystack)) return "Java";
-  if (/go-build|\/go\//.test(haystack)) return "Go";
-  if (/redis/.test(haystack)) return "Redis";
-  if (/postgres/.test(haystack)) return "PostgreSQL";
-  if (/mysql/.test(haystack)) return "MySQL";
-  return service.processName || "Unknown";
-}
-
 function friendlyName(service) {
   if (service.cwd && service.cwd !== "/") {
     return service.cwd.split("/").filter(Boolean).at(-1) || service.processName;
   }
   return service.processName;
-}
-
-function isLikelyHttp(port, kind) {
-  if (["Redis", "PostgreSQL", "MySQL"].includes(kind)) return false;
-  return ![22, 25, 53, 110, 143, 445, 993, 995].includes(port);
 }
 
 function classifyVisibility(service) {
@@ -157,7 +136,7 @@ export async function scanListeningServices() {
       "-iTCP",
       "-sTCP:LISTEN",
       "-Fpcn",
-    ]));
+    ], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 }));
   } catch (error) {
     if (error.code === 1) return [];
     throw error;
@@ -188,5 +167,19 @@ export async function scanListeningServices() {
     unique.set(key, service);
   }
 
-  return [...unique.values()].sort((a, b) => a.port - b.port);
+  const recognized = await Promise.all([...unique.values()].map(async (service) => {
+    const recognition = await recognizeService(service);
+    return {
+      ...service,
+      name: recognition.name || service.name,
+      kind: recognition.kind || service.kind,
+      suggestedStartCommand: recognition.suggestedStartCommand,
+      recognition: {
+        confidence: recognition.confidence,
+        signals: recognition.signals,
+      },
+    };
+  }));
+
+  return recognized.sort((a, b) => a.port - b.port);
 }

@@ -19,12 +19,12 @@ test("isHiddenLaunch recognizes macOS login launch and explicit hidden mode", ()
 
 test("desktopSettingsSnapshot only exposes renderer-safe state", () => {
   assert.deepEqual(desktopSettingsSnapshot({
-    appVersion: "0.3.0",
+    appVersion: "1.0.0",
     isPackaged: true,
     loginItemSettings: { openAtLogin: true, executableWillLaunchAtLogin: true },
     startedHidden: true,
   }), {
-    version: "0.3.0",
+    version: "1.0.0",
     canOpenAtLogin: true,
     openAtLogin: true,
     startedHidden: true,

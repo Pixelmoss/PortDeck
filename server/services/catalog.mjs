@@ -27,7 +27,11 @@ export function buildCatalog(managedServices, discoveredServices, dashboardPort)
       status: running ? "running" : conflict ? "conflict" : "offline",
       pid: running?.pid || null,
       port: running?.port || service.preferredPort,
-      url: running?.url || (service.preferredPort ? `http://127.0.0.1:${service.preferredPort}` : null),
+      url: running?.port
+        ? `${service.protocol || "http"}://127.0.0.1:${running.port}`
+        : service.preferredPort
+          ? `${service.protocol || "http"}://127.0.0.1:${service.preferredPort}`
+          : null,
       command: running?.command || service.startCommand,
       elapsed: running?.elapsed || null,
       processName: running?.processName || null,
@@ -50,6 +54,8 @@ export function buildCatalog(managedServices, discoveredServices, dashboardPort)
       startCommand: "",
       stopCommand: "",
       healthPath: "/",
+      healthCheckEnabled: true,
+      protocol: "http",
     }));
 
   return [...managed, ...discovered].sort((a, b) => {
