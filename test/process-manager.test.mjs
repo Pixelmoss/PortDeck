@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isProcessAlive, ProcessManager } from "../server/services/process-manager.mjs";
@@ -13,6 +13,16 @@ function fakeChild(pid) {
   child.kill = () => {};
   queueMicrotask(() => child.emit("spawn"));
   return child;
+}
+
+function identity(pid, overrides = {}) {
+  return {
+    pid,
+    startedAt: "Thu Jul 31 10:00:00 2026",
+    cwd: "/tmp/demo",
+    command: "node server.js",
+    ...overrides,
+  };
 }
 
 test("isProcessAlive distinguishes an existing process from ESRCH", () => {
@@ -42,8 +52,13 @@ test("ProcessManager gracefully stops a discovered process", async () => {
     signals.push([pid, signal]);
     alive = false;
   };
-  const manager = new ProcessManager({ logDirectory: "/tmp", killImpl, stopTimeoutMs: 10 });
-  const result = await manager.stopDiscovered(321);
+  const manager = new ProcessManager({
+    logDirectory: "/tmp",
+    killImpl,
+    stopTimeoutMs: 10,
+    inspectProcessImpl: async () => identity(321),
+  });
+  const result = await manager.stopDiscovered(321, identity(321));
   assert.deepEqual(result, { method: "signal", pid: 321, forced: false });
   assert.deepEqual(signals, [[321, "SIGTERM"]]);
 });
@@ -59,10 +74,30 @@ test("ProcessManager escalates to SIGKILL when graceful stop times out", async (
     signals.push([pid, signal]);
     if (signal === "SIGKILL") alive = false;
   };
-  const manager = new ProcessManager({ logDirectory: "/tmp", killImpl, stopTimeoutMs: 15, killTimeoutMs: 15 });
-  const result = await manager.stopDiscovered(654);
+  const manager = new ProcessManager({
+    logDirectory: "/tmp",
+    killImpl,
+    stopTimeoutMs: 15,
+    killTimeoutMs: 15,
+    inspectProcessImpl: async () => identity(654),
+  });
+  const result = await manager.stopDiscovered(654, identity(654));
   assert.equal(result.forced, true);
   assert.deepEqual(signals, [[654, "SIGTERM"], [654, "SIGKILL"]]);
+});
+
+test("ProcessManager refuses to signal a reused pid", async () => {
+  const signals = [];
+  const manager = new ProcessManager({
+    logDirectory: "/tmp",
+    killImpl: (pid, signal) => signals.push([pid, signal]),
+    inspectProcessImpl: async () => identity(321, { startedAt: "Thu Jul 31 11:00:00 2026" }),
+  });
+  await assert.rejects(
+    manager.stopDiscovered(321, identity(321)),
+    (error) => error.statusCode === 409 && error.details.reason === "process_identity_mismatch",
+  );
+  assert.deepEqual(signals, []);
 });
 
 test("ProcessManager tails logs without returning the entire file", async () => {
@@ -71,6 +106,52 @@ test("ProcessManager tails logs without returning the entire file", async () => 
   const manager = new ProcessManager({ logDirectory: directory });
   assert.equal(await manager.readLog("svc", 4), "6789");
   assert.equal(await manager.readLog("missing"), "");
+});
+
+test("ProcessManager rotates logs before they exceed the configured generation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "portdeck-log-rotation-test-"));
+  await writeFile(path.join(directory, "svc.log"), "12345");
+  const manager = new ProcessManager({
+    logDirectory: directory,
+    maxLogBytes: 5,
+    retainedLogFiles: 2,
+  });
+  await manager.appendLog("svc", "next");
+  assert.equal(await readFile(path.join(directory, "svc.log.1"), "utf8"), "12345");
+  assert.equal(await readFile(path.join(directory, "svc.log"), "utf8"), "next");
+});
+
+test("ProcessManager recovers an owned process after PortDeck restarts", async () => {
+  let alive = true;
+  const signals = [];
+  const expected = identity(777);
+  const manager = new ProcessManager({
+    logDirectory: "/tmp",
+    monitorIntervalMs: 0,
+    inspectProcessImpl: async () => alive ? expected : null,
+    killImpl: (pid, signal) => {
+      if (signal === 0) {
+        if (!alive) { const error = new Error(); error.code = "ESRCH"; throw error; }
+        return;
+      }
+      signals.push([pid, signal]);
+      alive = false;
+    },
+    stopTimeoutMs: 10,
+  });
+  const service = {
+    id: "svc",
+    lastPid: 777,
+    processIdentity: expected,
+    desiredState: "running",
+    autoRestart: false,
+  };
+  assert.equal((await manager.recover([service])).length, 1);
+  assert.equal(manager.snapshot("svc").ownership, "recovered");
+  const result = await manager.stop(service, 777, expected);
+  assert.equal(result.ownership, "recovered");
+  assert.deepEqual(signals, [[-777, "SIGTERM"]]);
+  manager.close();
 });
 
 test("ProcessManager restarts an auto-restart service after an unexpected exit", async () => {

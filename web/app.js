@@ -35,6 +35,9 @@ const elements = {
   openAtLoginToggle: document.querySelector("#openAtLoginToggle"),
   openAtLoginDescription: document.querySelector("#openAtLoginDescription"),
   desktopVersion: document.querySelector("#desktopVersion"),
+  dataSafetyStatus: document.querySelector("#dataSafetyStatus"),
+  backupConfigButton: document.querySelector("#backupConfigButton"),
+  exportDiagnosticsButton: document.querySelector("#exportDiagnosticsButton"),
 };
 
 const FILTER_LABELS = {
@@ -137,6 +140,17 @@ function healthBadge(service) {
   return '<span class="badge health unknown">NO HTTP</span>';
 }
 
+function ownershipBadge(service) {
+  if (service.status !== "running" || service.source !== "managed") return "";
+  if (service.ownership === "portdeck") {
+    return '<span class="badge ownership portdeck" title="当前进程由 PortDeck 启动并持续跟踪">OWNED</span>';
+  }
+  if (service.ownership === "recovered") {
+    return '<span class="badge ownership recovered" title="PortDeck 重启后通过进程身份恢复了管理关系">RECOVERED</span>';
+  }
+  return '<span class="badge ownership external" title="外部进程；停止前会重新验证进程身份">EXTERNAL</span>';
+}
+
 function faviconMarkup(service) {
   if (!service.health?.faviconUrl || service.health.status !== "healthy") return "";
   try {
@@ -154,6 +168,7 @@ function renderService(service) {
     : '<span class="badge discovered">DISCOVERED</span>';
   const conflictBadge = service.status === "conflict" ? '<span class="badge conflict">CONFLICT</span>' : "";
   const health = healthBadge(service);
+  const ownership = ownershipBadge(service);
   const port = service.port || service.preferredPort;
   const portClass = service.status === "running" ? "" : " offline";
   const runtime = service.status === "running"
@@ -170,7 +185,7 @@ function renderService(service) {
         <div class="service-copy">
           <div class="service-title">
             <strong title="${escapeHtml(service.name)}">${escapeHtml(service.name)}</strong>
-            ${sourceBadge}${conflictBadge}${health}
+            ${sourceBadge}${ownership}${conflictBadge}${health}
           </div>
           <div class="service-subtitle" title="${escapeHtml(service.cwd)}">${escapeHtml(shortPath(service.cwd))}</div>
         </div>
@@ -278,6 +293,44 @@ async function loadDesktopSettings() {
   return settings;
 }
 
+async function loadDataSafetyStatus() {
+  const diagnostics = await api("/api/system/diagnostics");
+  const registry = diagnostics.registry;
+  elements.dataSafetyStatus.textContent = registry.recoveryNotice
+    || `配置 schema v${registry.schemaVersion} · ${registry.backupCount} 份备份 · 日志自动轮转`;
+  return diagnostics;
+}
+
+async function createConfigBackup() {
+  elements.backupConfigButton.disabled = true;
+  try {
+    const result = await api("/api/system/backup", { method: "POST" });
+    elements.dataSafetyStatus.textContent = `已创建 ${result.fileName} · 共 ${result.registry.backupCount} 份备份`;
+    toast("配置备份已创建");
+  } finally {
+    elements.backupConfigButton.disabled = false;
+  }
+}
+
+async function exportDiagnostics() {
+  elements.exportDiagnosticsButton.disabled = true;
+  try {
+    const diagnostics = await api("/api/system/diagnostics");
+    const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = `PortDeck-diagnostics-${new Date().toISOString().replaceAll(":", "-")}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+    toast("诊断报告已导出");
+  } finally {
+    elements.exportDiagnosticsButton.disabled = false;
+  }
+}
+
 function findService(id) {
   return state.services.find((service) => service.id === id);
 }
@@ -332,7 +385,12 @@ async function performAction(service, action) {
   if (action === "manage") return openServiceDialog(service, "promote");
   if (action === "edit") return openServiceDialog(service, "edit");
   if (action === "logs") return showLogs(service);
-  if (action === "stop" && !window.confirm(`确定停止「${service.name}」吗？`)) return;
+  if (action === "stop") {
+    const externalWarning = service.ownership === "external"
+      ? "\n\n此进程不是由 PortDeck 启动的；发送信号前会再次验证 PID、启动时间和工作目录。"
+      : "";
+    if (!window.confirm(`确定停止「${service.name}」吗？${externalWarning}`)) return;
+  }
 
   state.acting.add(service.id);
   render();
@@ -437,6 +495,7 @@ if (window.portdeckDesktop) {
   elements.desktopSettingsButton.addEventListener("click", async () => {
     try {
       await loadDesktopSettings();
+      await loadDataSafetyStatus().catch(() => {});
       elements.desktopSettingsDialog.showModal();
     } catch (error) {
       toast(error.message, "error");
@@ -455,6 +514,12 @@ if (window.portdeckDesktop) {
       await loadDesktopSettings().catch(() => {});
       toast(error.message, "error");
     }
+  });
+  elements.backupConfigButton.addEventListener("click", () => {
+    createConfigBackup().catch((error) => toast(error.message, "error"));
+  });
+  elements.exportDiagnosticsButton.addEventListener("click", () => {
+    exportDiagnostics().catch((error) => toast(error.message, "error"));
   });
   window.portdeckDesktop.onSettingsChanged(applyDesktopSettings);
   loadDesktopSettings().catch((error) => {

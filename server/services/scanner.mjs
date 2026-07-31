@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { classifyService, isLikelyHttp, recognizeService } from "./recognizer.mjs";
+import { normalizeProcessIdentity } from "./process-identity.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -52,6 +53,24 @@ export function parseCwdFields(output) {
   return cwdByPid;
 }
 
+export function parseProcessRows(output) {
+  const rows = new Map();
+  for (const line of String(output || "").split("\n")) {
+    const tokens = line.trim().split(/\s+/);
+    if (tokens.length < 9) continue;
+    const pid = Number(tokens[0]);
+    const ppid = Number(tokens[1]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
+    rows.set(pid, {
+      ppid,
+      elapsed: tokens[2],
+      startedAt: tokens.slice(3, 8).join(" "),
+      command: tokens.slice(8).join(" "),
+    });
+  }
+  return rows;
+}
+
 async function readCommands(pids) {
   if (!pids.length) return new Map();
   let stdout = "";
@@ -65,6 +84,8 @@ async function readCommands(pids) {
       "-o",
       "etime=",
       "-o",
+      "lstart=",
+      "-o",
       "command=",
       "-p",
       pids.join(","),
@@ -73,17 +94,7 @@ async function readCommands(pids) {
     stdout = error.stdout || "";
   }
 
-  const rows = new Map();
-  for (const line of stdout.split("\n")) {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-    if (!match) continue;
-    rows.set(Number(match[1]), {
-      ppid: Number(match[2]),
-      elapsed: match[3],
-      command: match[4],
-    });
-  }
-  return rows;
+  return parseProcessRows(stdout);
 }
 
 async function readWorkingDirectories(pids) {
@@ -159,6 +170,7 @@ export async function scanListeningServices() {
       ...details,
       cwd: cwdByPid.get(socket.pid) || "",
     };
+    service.processIdentity = normalizeProcessIdentity(service);
     service.kind = classifyService(service);
     service.name = friendlyName(service);
     service.isHttp = isLikelyHttp(service.port, service.kind);

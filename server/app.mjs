@@ -67,18 +67,73 @@ export async function startPortDeckServer({
   port = 4399,
   dataRoot = path.join(ROOT, "data"),
   webRoot = DEFAULT_WEB_ROOT,
-  version = "1.0.0",
+  version = "1.1.0",
   allowPortFallback = false,
   scanner = scanListeningServices,
   logger = console,
 } = {}) {
   const registry = new ServiceRegistry(path.join(dataRoot, "services.json"));
-  const processManager = new ProcessManager({ logDirectory: path.join(dataRoot, "logs") });
+  const processManager = new ProcessManager({
+    logDirectory: path.join(dataRoot, "logs"),
+    onRuntimeChange: async (event) => {
+      const service = registry.find(event.serviceId);
+      if (!service) return;
+      if (event.type === "auto-restarted") {
+        await registry.upsert({
+          ...service,
+          lastPid: event.pid,
+          processIdentity: event.processIdentity,
+          desiredState: "running",
+          lastSeenAt: new Date().toISOString(),
+        }, service.id);
+      } else if (event.type === "exited") {
+        await registry.upsert({
+          ...service,
+          lastPid: null,
+          processIdentity: null,
+          desiredState: !event.expected && event.autoRestart ? "running" : "stopped",
+          lastSeenAt: event.exitedAt,
+        }, service.id);
+      }
+    },
+  });
   const inspector = new ServiceInspector();
   await registry.load();
+  const recoveredProcesses = await processManager.recover(registry.list());
+  const recoveredIds = new Set(recoveredProcesses.map((item) => item.serviceId));
+  const startupScan = await scanner().catch((error) => {
+    logger.error("Unable to scan services during recovery:", error);
+    return [];
+  });
+  for (const service of registry.list()) {
+    if (service.desiredState !== "running" || !service.autoRestart || recoveredIds.has(service.id)) continue;
+    const occupied = service.preferredPort
+      ? startupScan.find((item) => item.port === service.preferredPort)
+      : null;
+    if (occupied) {
+      processManager.recordError(
+        service.id,
+        "startup-recovery",
+        new Error(`端口 ${service.preferredPort} 已被 PID ${occupied.pid} 占用，未自动恢复服务`),
+      );
+      continue;
+    }
+    try {
+      const result = await processManager.start(service);
+      await registry.upsert({
+        ...service,
+        lastPid: result.pid,
+        processIdentity: result.processIdentity,
+        desiredState: "running",
+        lastSeenAt: new Date().toISOString(),
+      }, service.id);
+    } catch (error) {
+      logger.error(`Unable to restore ${service.name}:`, error);
+    }
+  }
 
   const startedAt = Date.now();
-  let scanCache = { at: 0, services: [] };
+  let scanCache = { at: Date.now(), services: startupScan };
   let dashboardPort = port;
   const activeLogStreams = new Set();
 
@@ -88,7 +143,13 @@ export async function startPortDeckServer({
       scanCache = { at: now, services: await scanner() };
     }
     const catalog = buildCatalog(registry.list(), scanCache.services, dashboardPort)
-      .map((service) => ({ ...service, runtime: processManager.snapshot(service.id) }));
+      .map((service) => {
+        const runtime = processManager.snapshot(service.id);
+        const ownership = service.source === "managed" && service.pid && runtime.managedPid === service.pid
+          ? runtime.ownership
+          : "external";
+        return { ...service, ownership, runtime };
+      });
     return inspector.decorate(catalog, { fresh });
   }
 
@@ -159,6 +220,57 @@ export async function startPortDeckServer({
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/api/system/diagnostics") {
+      const services = await getCatalog({ fresh: true });
+      return sendJson(response, 200, {
+        generatedAt: new Date().toISOString(),
+        application: {
+          name: "PortDeck",
+          version,
+          platform: process.platform,
+          architecture: process.arch,
+          node: process.version,
+          uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+        },
+        registry: await registry.status(),
+        summary: summarize(services),
+        services: services.map((service) => ({
+          id: service.id,
+          name: service.name,
+          kind: service.kind,
+          source: service.source,
+          status: service.status,
+          ownership: service.ownership,
+          port: service.port || service.preferredPort || null,
+          projectDirectory: service.cwd ? path.basename(service.cwd) : null,
+          health: service.health ? {
+            status: service.health.status,
+            statusCode: service.health.statusCode || null,
+            latencyMs: service.health.latencyMs || null,
+            error: service.health.error || null,
+          } : null,
+          runtime: {
+            operation: service.runtime.operation,
+            ownership: service.runtime.ownership,
+            recovered: service.runtime.recovered,
+            autoRestartPending: service.runtime.autoRestartPending,
+            lastExit: service.runtime.lastExit,
+            lastError: service.runtime.lastError,
+          },
+        })),
+        processManager: await processManager.diagnostics(),
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/system/backup") {
+      const fileName = await registry.createManualBackup();
+      return sendJson(response, 201, {
+        ok: true,
+        fileName,
+        registry: await registry.status(),
+      });
+    }
+
     const logStreamMatch = url.pathname.match(/^\/api\/services\/([^/]+)\/logs\/stream$/);
     if (logStreamMatch && request.method === "GET") {
       return streamLogs(request, response, decodeURIComponent(logStreamMatch[1]));
@@ -211,7 +323,13 @@ export async function startPortDeckServer({
           return sendError(response, 409, `端口 ${current.port} 已被 PID ${current.conflict.pid} 占用`, current.conflict);
         }
         const result = await processManager.start(current);
-        const service = await registry.upsert({ ...current, lastPid: result.pid }, id);
+        const service = await registry.upsert({
+          ...current,
+          lastPid: result.pid,
+          processIdentity: result.processIdentity,
+          desiredState: "running",
+          lastSeenAt: new Date().toISOString(),
+        }, id);
         scanCache.at = 0;
         inspector.clear(id);
         return sendJson(response, 202, { ok: true, service, ...result });
@@ -219,8 +337,17 @@ export async function startPortDeckServer({
 
       if (action === "stop") {
         const result = current.source === "managed"
-          ? await processManager.stop(current, current.pid)
-          : await processManager.stopDiscovered(current.pid);
+          ? await processManager.stop(current, current.pid, current.processIdentity)
+          : await processManager.stopDiscovered(current.pid, current.processIdentity);
+        if (current.source === "managed") {
+          await registry.upsert({
+            ...current,
+            lastPid: null,
+            processIdentity: null,
+            desiredState: "stopped",
+            lastSeenAt: new Date().toISOString(),
+          }, id);
+        }
         scanCache.at = 0;
         inspector.clear(id);
         return sendJson(response, 202, { ok: true, ...result });
@@ -228,8 +355,18 @@ export async function startPortDeckServer({
 
       if (action === "restart") {
         if (current.source !== "managed") return sendError(response, 400, "只有受管服务可以重启");
-        const result = await processManager.restart(current, current.status === "running" ? current.pid : null);
-        const service = await registry.upsert({ ...current, lastPid: result.pid }, id);
+        const result = await processManager.restart(
+          current,
+          current.status === "running" ? current.pid : null,
+          current.processIdentity,
+        );
+        const service = await registry.upsert({
+          ...current,
+          lastPid: result.pid,
+          processIdentity: result.processIdentity,
+          desiredState: "running",
+          lastSeenAt: new Date().toISOString(),
+        }, id);
         scanCache.at = 0;
         inspector.clear(id);
         return sendJson(response, 202, { ok: true, service, ...result });
@@ -271,7 +408,12 @@ export async function startPortDeckServer({
         return await serveStatic(request, response, url.pathname);
       } catch (error) {
         logger.error(error);
-        return sendError(response, error.statusCode || 500, error.message || "Internal server error");
+        return sendError(
+          response,
+          error.statusCode || 500,
+          error.message || "Internal server error",
+          error.details,
+        );
       }
     });
   }
@@ -298,6 +440,7 @@ export async function startPortDeckServer({
     registry,
     processManager,
     inspector,
+    recoveredProcesses,
     close: async () => {
       processManager.close();
       for (const response of activeLogStreams) response.end();

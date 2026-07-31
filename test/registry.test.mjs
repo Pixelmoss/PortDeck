@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ServiceRegistry, sanitizeService } from "../server/services/registry.mjs";
@@ -30,5 +30,38 @@ test("ServiceRegistry persists and reloads services", async () => {
   assert.equal(reloaded.find(created.id).name, "Web");
   assert.equal(reloaded.find(created.id).healthCheckEnabled, true);
   assert.equal(reloaded.find(created.id).protocol, "http");
-  assert.match(await readFile(filePath, "utf8"), /"version": 2/);
+  assert.equal(reloaded.find(created.id).desiredState, "stopped");
+  assert.match(await readFile(filePath, "utf8"), /"version": 3/);
+});
+
+test("ServiceRegistry migrates v2 data and keeps a backup", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "portdeck-migration-test-"));
+  const filePath = path.join(directory, "services.json");
+  await writeFile(filePath, JSON.stringify({
+    version: 2,
+    services: [{ id: "svc_old", name: "Old", startCommand: "npm start" }],
+  }));
+
+  const registry = new ServiceRegistry(filePath);
+  await registry.load();
+  assert.equal(registry.find("svc_old").desiredState, "stopped");
+  assert.equal((await registry.status()).backupCount, 1);
+  assert.match(await readFile(filePath, "utf8"), /"version": 3/);
+});
+
+test("ServiceRegistry restores the latest valid backup after corruption", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "portdeck-recovery-test-"));
+  const filePath = path.join(directory, "services.json");
+  const registry = new ServiceRegistry(filePath);
+  await registry.load();
+  const service = await registry.upsert({ name: "Recover me", startCommand: "npm start" });
+  await registry.createManualBackup();
+  await writeFile(filePath, "{ definitely-not-json");
+
+  const recovered = new ServiceRegistry(filePath);
+  await recovered.load();
+  assert.equal(recovered.find(service.id).name, "Recover me");
+  const status = await recovered.status();
+  assert.ok(status.recoveredFromBackup);
+  assert.match(status.recoveryNotice, /已从备份/);
 });

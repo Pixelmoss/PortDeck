@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0 - 2026-07-31
+
+### Added
+
+- Stable process identities based on PID, kernel start time, working directory, and command metadata
+- Safe refusal when a PID has been reused before an external or recovered process is stopped
+- Persistent desired state and recovery of PortDeck-owned detached processes after the desktop app restarts
+- Automatic restart restoration when a previously desired service disappeared while PortDeck was offline
+- Registry schema v3 with rolling configuration backups, v2 migration, corruption quarantine, and backup recovery
+- Manual configuration backup and privacy-conscious diagnostic report export from Desktop Settings
+- Bounded copy-truncate log rotation with three retained generations and live-process maintenance checks
+- Ownership indicators for PortDeck-owned, recovered, and externally started managed services
+- Recent process-operation errors and log policy information in diagnostic reports
+
+### Changed
+
+- Updated the product version from 1.0.0 to 1.1.0
+- Expanded the automated test suite from 32 to 41 tests
+- Stop and restart operations now verify process identity immediately before signaling when ownership was recovered or external
+- Diagnostic reports omit full project paths, commands, notes, and log contents
+
 ## 1.0.0 - 2026-07-31
 
 ### Added

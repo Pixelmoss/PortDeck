@@ -1,5 +1,13 @@
+import { processIdentityMatches } from "./process-identity.mjs";
+
 function matchesManaged(managed, discovered) {
-  if (managed.lastPid && managed.lastPid === discovered.pid) return true;
+  if (
+    managed.lastPid
+    && managed.lastPid === discovered.pid
+    && managed.processIdentity
+    && discovered.processIdentity
+    && processIdentityMatches(managed.processIdentity, discovered.processIdentity)
+  ) return true;
   if (managed.cwd && discovered.cwd) {
     return managed.cwd === discovered.cwd
       && (!managed.preferredPort || managed.preferredPort === discovered.port);
@@ -34,6 +42,8 @@ export function buildCatalog(managedServices, discoveredServices, dashboardPort)
           : null,
       command: running?.command || service.startCommand,
       elapsed: running?.elapsed || null,
+      startedAt: running?.startedAt || service.processIdentity?.startedAt || null,
+      processIdentity: running?.processIdentity || service.processIdentity || null,
       processName: running?.processName || null,
       conflict: conflict
         ? { pid: conflict.pid, processName: conflict.processName, command: conflict.command }
@@ -56,6 +66,7 @@ export function buildCatalog(managedServices, discoveredServices, dashboardPort)
       healthPath: "/",
       healthCheckEnabled: true,
       protocol: "http",
+      processIdentity: item.processIdentity || null,
     }));
 
   return [...managed, ...discovered].sort((a, b) => {

@@ -2,13 +2,13 @@
 
 PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS 上正在监听的 TCP 服务，并允许你把临时发现的进程转为可持久管理、可一键启动和停止的服务。
 
-当前源码版本是 `1.0.0` Electron 桌面应用。它把服务发现、HTTP 健康检查、智能项目识别、可靠进程管理、实时日志和 macOS 菜单栏控制整合在一个本地优先的应用中。
+当前源码版本是 `1.1.0` Electron 桌面应用。它把服务发现、HTTP 健康检查、智能项目识别、可靠进程管理、实时日志、数据恢复和 macOS 菜单栏控制整合在一个本地优先的应用中。
 
 ## 下载
 
-已公开的稳定测试包仍可从 [PortDeck 0.3.0 Release](https://github.com/Pixelmoss/PortDeck/releases/tag/v0.3.0) 下载。1.0 安装包将在 Developer ID 签名和 Apple 公证通过后发布。
+当前内部测试包可从 [PortDeck 1.0.0 Release](https://github.com/Pixelmoss/PortDeck/releases/tag/v1.0.0) 下载。1.1 安装包将在完整验证后生成。
 
-> 本机可生成 1.0 内部测试包；面向其他用户分发前必须完成 Developer ID 签名与 Apple 公证。
+> 本机可生成 1.1 内部测试包；面向其他用户分发前必须完成 Developer ID 签名与 Apple 公证。
 
 ## 已实现
 
@@ -21,8 +21,11 @@ PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS �
 - 区分“自动发现”“受管”“离线”和“端口冲突”状态
 - 将发现的服务纳入管理并持久化启动/停止命令
 - 一键启动、停止和重启受管服务，防止同一服务并发执行冲突操作
+- 使用 PID、进程启动时间和工作目录校验进程身份，防止 PID 复用导致误停止
+- 区分 PortDeck 启动、应用重启后恢复和外部启动的进程所有权
 - SIGTERM 优雅停止，超时后使用 SIGKILL 兜底
 - 由 PortDeck 启动的服务异常退出后可选择自动重启
+- PortDeck 重启后恢复仍在运行的受管进程和期望运行状态
 - 停止外部启动的发现服务
 - 通过 Server-Sent Events 实时查看由 PortDeck 启动的服务日志
 - 名称、端口、命令搜索以及状态筛选
@@ -36,6 +39,8 @@ PortDeck 是一个本地优先的开发服务控制台。它自动发现 macOS �
 - 正式 PortDeck 应用图标、ASAR 打包和 Hardened Runtime 权限配置
 - GitHub Actions 双架构签名、公证与 Release 工作流
 - 配置保存在 macOS 标准 Application Support 目录
+- schema v3 配置迁移、最近 10 份滚动备份和损坏自动恢复
+- 5 MB 日志轮转、三份历史日志和一键导出隐私友好的诊断报告
 
 ## 运行
 
@@ -100,12 +105,14 @@ npm run desktop:verify -- release/mac-universal/PortDeck.app
 ```
 
 签名、公证凭据和 GitHub Release 配置见 [docs/RELEASING.md](docs/RELEASING.md)。
+Mac App Store 双版本策略和沙箱验证清单见 [docs/APP_STORE_FEASIBILITY.md](docs/APP_STORE_FEASIBILITY.md)。
 
 ## 配置与日志
 
 浏览器/命令行版本的运行数据默认保存在：
 
 - `data/services.json`：受管服务配置
+- `data/backups/`：自动与手动配置备份
 - `data/logs/<service-id>.log`：由 PortDeck 启动的服务输出
 
 可通过环境变量调整：
@@ -130,14 +137,14 @@ Node 本地守护进程
     ├── Recognizer：项目清单 + 进程命令推断
     ├── Inspector：HTTP 状态 + 延迟 + 页面元数据
     ├── Catalog：合并发现态与受管态
-    ├── Registry：JSON 原子持久化
-    ├── Process Manager：进程组、优雅停止、自动重启
+    ├── Registry：schema v3、原子持久化、备份与损坏恢复
+    ├── Process Manager：进程身份、所有权恢复、进程组与自动重启
     └── Log Stream：SSE 实时日志
 ```
 
 Electron 主进程直接嵌入同一个 Node 本地服务模块。后续 SwiftUI 版本将继续沿用稳定后的服务配置格式和状态模型。
 
-## 1.0 发布前置条件
+## 正式发布前置条件
 
 - 有效的 Apple Developer Program 账号
 - `Developer ID Application` 签名证书
