@@ -1,5 +1,13 @@
 # Changelog
 
+# 2.1.0 - 2026-08-01
+
+- Redesigned the main window around a macOS-native utility layout.
+- Replaced the five-card overview with a compact service status strip.
+- Added a persistent service inspector for lifecycle controls, process details, commands, and recent logs.
+- Simplified service rows while preserving workspaces, bulk actions, favorites, history, risk previews, and bilingual operation.
+- Added automatic light and dark appearance support.
+
 ## 2.0.0 - 2026-08-01
 
 ### Added

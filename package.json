@@ -1,6 +1,6 @@
 {
   "name": "portdeck",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "author": "PortDeck",
   "description": "A local-first dashboard for discovering and managing development services.",

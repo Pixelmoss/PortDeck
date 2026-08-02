@@ -17,6 +17,9 @@ const state = {
   scannedAt: null,
   dataSafetyRegistry: null,
   updateStatusInfo: null,
+  inspectedServiceId: null,
+  inspectorLogs: new Map(),
+  inspectorLogLoading: new Set(),
 };
 
 if (window.portdeckDesktop) document.documentElement.classList.add("desktop-shell");
@@ -75,6 +78,8 @@ const elements = {
   importConfigFile: document.querySelector("#importConfigFile"),
   checkUpdateButton: document.querySelector("#checkUpdateButton"),
   updateStatus: document.querySelector("#updateStatus"),
+  inspector: document.querySelector("#serviceInspector"),
+  scanMetric: document.querySelector("#scanMetric"),
 };
 
 const FILTER_LABELS = {
@@ -133,6 +138,11 @@ const ENGLISH_TEXT = new Map(Object.entries({
   "PortDeck 首页": "PortDeck home", "服务筛选": "Service filters", "服务排序": "Service sorting",
   "关闭": "Close", "关闭日志": "Close logs", "例如：前端 / 数据服务": "Example: Frontend / Data",
   "开发, API, 重要": "Development, API, Important", "例如：交易工具": "Example: Trading tools",
+  "本地服务控制台": "Local service console", "扫描正常": "Scanner ready", "每 5 秒检查本机端口": "Checks local ports every 5 seconds",
+  "健康检查通过": "Health checks passed", "最近扫描": "Last scan", "等待扫描": "Waiting", "端口": "Port",
+  "健康状态": "Health", "操作": "Actions", "服务详情": "Service details", "已选择": "Selected",
+  "选择一个服务查看详情": "Select a service to view details",
+  "端口、健康状态、进程和快捷操作会显示在这里。": "Port, health, process details, and quick actions appear here.",
 }));
 
 const ENGLISH_RISK_FINDINGS = {
@@ -199,6 +209,12 @@ function applyLocale(locale = "zh-CN") {
 
 function renderScanStatus() {
   if (!state.scannedAt) return;
+  if (elements.scanMetric) {
+    elements.scanMetric.textContent = tr(
+      state.scannedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+      state.scannedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+    );
+  }
   const englishServiceCount = `${state.summary.total} ${state.summary.total === 1 ? "service" : "services"}`;
   elements.scanStatus.textContent = tr(
     `最近扫描 ${state.scannedAt.toLocaleTimeString("zh-CN", { hour12: false })} · ${state.summary.total} 个服务`,
@@ -308,39 +324,44 @@ function filteredServices() {
 
 function renderMetrics() {
   state.summary.favorites = state.services.filter((service) => service.favorite).length;
+  state.summary.offline = state.services.filter((service) => service.status === "offline").length;
   document.querySelector("#runningMetric").textContent = state.summary.running;
-  document.querySelector("#managedMetric").textContent = state.summary.managed;
   document.querySelector("#healthyMetric").textContent = state.summary.healthy;
-  document.querySelector("#unhealthyMetric").textContent = state.summary.unhealthy;
-  document.querySelector("#conflictMetric").textContent = state.summary.conflicts;
+  document.querySelector("#offlineMetric").textContent = state.summary.offline;
   for (const [key, value] of Object.entries(state.summary)) {
     document.querySelectorAll(`[data-count="${key}"]`).forEach((node) => { node.textContent = value; });
   }
 }
 
-function actionButtons(service) {
+function actionButtons(service, { expanded = false } = {}) {
   const busy = state.acting.has(service.id) || service.runtime?.operation === "busy" ? " disabled" : "";
   const buttons = [];
-  if (service.source === "managed") {
-    buttons.push(`<button class="row-action favorite${service.favorite ? " active" : ""}" data-action="favorite" data-id="${escapeHtml(service.id)}" title="${service.favorite ? tr("取消收藏", "Remove favorite") : tr("收藏", "Favorite")}">${service.favorite ? "★" : "☆"}</button>`);
+  const add = (action, label, className = "") => buttons.push(`<button class="row-action ${className}" data-action="${action}" data-id="${escapeHtml(service.id)}"${busy}>${label}</button>`);
+
+  if (!expanded) {
+    if (service.source === "discovered") {
+      if (service.status === "running" && service.url) add("open", tr("打开", "Open"), "action-open");
+      add("manage", tr("纳入管理", "Manage"), "manage action-manage");
+      return buttons.join("");
+    }
+    if (service.status === "running" && service.url) add("open", tr("打开", "Open"), "action-open");
+    if (service.status === "running") add("stop", tr("停止", "Stop"), "stop action-stop");
+    if (service.status !== "running") {
+      add("start", tr("启动", "Start"), "start action-start");
+      add("edit", tr("编辑", "Edit"), "action-edit");
+    }
+    return buttons.join("");
   }
 
-  if (service.status === "running" && service.url) {
-    buttons.push(`<button class="row-action" data-action="open" data-id="${escapeHtml(service.id)}" title="${tr("浏览器打开", "Open in browser")}"${busy}>↗</button>`);
-  }
-  if (service.status === "running") {
-    buttons.push(`<button class="row-action stop" data-action="stop" data-id="${escapeHtml(service.id)}" title="${tr("停止服务", "Stop service")}"${busy}>■</button>`);
-  }
-  if (service.source === "discovered") {
-    buttons.push(`<button class="row-action manage" data-action="manage" data-id="${escapeHtml(service.id)}"${busy}>${tr("纳入管理", "Manage")}</button>`);
-  } else {
-    if (service.status !== "running") {
-      buttons.push(`<button class="row-action start" data-action="start" data-id="${escapeHtml(service.id)}" title="${tr("启动服务", "Start service")}"${busy}>▶</button>`);
-    } else {
-      buttons.push(`<button class="row-action" data-action="restart" data-id="${escapeHtml(service.id)}" title="${tr("重启服务", "Restart service")}"${busy}>↻</button>`);
-    }
-    buttons.push(`<button class="row-action" data-action="logs" data-id="${escapeHtml(service.id)}" title="${tr("查看日志", "View logs")}">⌁</button>`);
-    buttons.push(`<button class="row-action" data-action="edit" data-id="${escapeHtml(service.id)}" title="${tr("编辑配置", "Edit configuration")}">···</button>`);
+  if (service.status === "running" && service.url) add("open", tr("浏览器打开", "Open in browser"), "action-open primary-action");
+  if (service.source === "managed" && service.status !== "running") add("start", tr("启动服务", "Start service"), "start action-start primary-action");
+  if (service.status === "running") add("stop", tr("停止服务", "Stop service"), "stop action-stop");
+  if (service.source === "managed" && service.status === "running") add("restart", tr("重新启动", "Restart"), "action-restart");
+  if (service.source === "discovered") add("manage", tr("纳入管理", "Manage service"), "manage action-manage");
+  if (service.source === "managed") {
+    add("logs", tr("查看完整日志", "View full logs"), "action-logs");
+    add("edit", tr("编辑配置", "Edit configuration"), "action-edit");
+    add("favorite", service.favorite ? tr("取消收藏", "Remove favorite") : tr("加入收藏", "Add favorite"), `favorite action-favorite${service.favorite ? " active" : ""}`);
   }
 
   return buttons.join("");
@@ -376,66 +397,144 @@ function faviconMarkup(service) {
   try {
     const url = new URL(service.health.faviconUrl);
     if (!["127.0.0.1", "localhost", "::1"].includes(url.hostname)) return "";
-    return `<img src="${escapeHtml(url.href)}" alt="" />`;
+    return `<img src="${escapeHtml(url.href)}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true" />`;
   } catch {
     return "";
   }
 }
 
 function renderService(service) {
-  const sourceBadge = service.source === "managed"
-    ? '<span class="badge managed">MANAGED</span>'
-    : '<span class="badge discovered">DISCOVERED</span>';
-  const conflictBadge = service.status === "conflict" ? '<span class="badge conflict">CONFLICT</span>' : "";
-  const health = healthBadge(service);
-  const ownership = ownershipBadge(service);
   const port = service.port || service.preferredPort;
   const portClass = service.status === "running" ? "" : " offline";
   const runtime = service.status === "running"
-    ? `${escapeHtml(service.kind || service.processName)} · PID ${escapeHtml(service.pid)}${service.elapsed ? ` · ${escapeHtml(service.elapsed)}` : ""}`
+    ? `PID ${escapeHtml(service.pid)}${service.elapsed ? ` · ${escapeHtml(service.elapsed)}` : ""}`
     : service.status === "conflict"
       ? tr(`PID ${escapeHtml(service.conflict?.pid)} 正在占用端口`, `PID ${escapeHtml(service.conflict?.pid)} is using the port`)
       : tr("等待启动", "Waiting to start");
-  const command = service.command || service.startCommand || tr("尚未记录启动命令", "No start command recorded");
   const workspace = state.workspaces.find((item) => item.id === service.workspaceId);
-  const tags = (service.tags || []).map((tag) => `<span class="service-tag">${escapeHtml(tag)}</span>`).join("");
   const selected = state.selected.has(service.id);
+  const inspected = state.inspectedServiceId === service.id;
+  const health = service.status !== "running"
+    ? tr("未运行", "Not running")
+    : service.health?.status === "healthy"
+      ? tr(`正常 ${Number.isFinite(service.health.latencyMs) ? `${service.health.latencyMs}ms` : ""}`.trim(), `Healthy ${Number.isFinite(service.health.latencyMs) ? `${service.health.latencyMs}ms` : ""}`.trim())
+      : service.health?.status === "unhealthy"
+        ? tr("检查异常", "Unhealthy")
+        : tr("未检查", "Not checked");
+  const healthClass = service.health?.status === "unhealthy" ? " unhealthy" : service.status !== "running" ? " offline" : "";
+  const source = service.source === "managed" ? tr("受管服务", "Managed") : tr("自动发现", "Discovered");
 
   return `
-    <article class="service-row${selected ? " selected" : ""}" data-status="${escapeHtml(service.status)}">
+    <article class="service-row${selected ? " selected" : ""}${inspected ? " inspected" : ""}" data-status="${escapeHtml(service.status)}" data-inspect-id="${escapeHtml(service.id)}" tabindex="0" aria-label="${escapeHtml(service.name)}">
       <label class="service-select"><input type="checkbox" data-select-id="${escapeHtml(service.id)}"${selected ? " checked" : ""} aria-label="${tr("选择", "Select")} ${escapeHtml(service.name)}" /></label>
       <div class="service-main">
-        <div class="service-avatar" data-kind="${escapeHtml(service.kind)}">${faviconMarkup(service) || escapeHtml(initials(service))}</div>
+        <div class="service-avatar" data-kind="${escapeHtml(service.kind)}"><span>${escapeHtml(initials(service))}</span>${faviconMarkup(service)}</div>
         <div class="service-copy">
           <div class="service-title">
             <strong title="${escapeHtml(service.name)}">${escapeHtml(service.name)}</strong>
-            ${sourceBadge}${ownership}${conflictBadge}${health}
           </div>
-          <div class="service-subtitle" title="${escapeHtml(service.cwd)}">${escapeHtml(workspace?.name || "Default")}${service.group ? ` / ${escapeHtml(service.group)}` : ""} · ${escapeHtml(shortPath(service.cwd))}</div>
-          ${tags ? `<div class="service-tags">${tags}</div>` : ""}
+          <div class="service-subtitle" title="${escapeHtml(service.cwd)}">${source} · ${escapeHtml(workspace?.name || "Default")}${service.group ? ` / ${escapeHtml(service.group)}` : ""} · ${escapeHtml(shortPath(service.cwd))}</div>
         </div>
       </div>
       <div class="service-port">
-        <div class="port-line">
-          <span class="port-pill${portClass}">${port ? `:${escapeHtml(port)}` : "NO PORT"}</span>
-          <code>${service.status === "running" ? "LISTEN" : service.status.toUpperCase()}</code>
-        </div>
+        <div class="port-line"><span class="port-pill${portClass}">${port ? `:${escapeHtml(port)}` : tr("无端口", "No port")}</span></div>
         <div class="service-meta">${runtime}</div>
       </div>
       <div class="service-detail">
-        <strong title="${escapeHtml(command)}">${escapeHtml(command)}</strong>
-        <div class="service-meta">${escapeHtml(service.health?.title || service.url || tr("本地进程", "Local process"))}</div>
+        <strong class="service-health${healthClass}">${escapeHtml(health)}</strong>
+        <div class="service-meta">${escapeHtml(service.kind || service.processName || tr("本地进程", "Local process"))}</div>
       </div>
       <div class="service-actions">${actionButtons(service)}</div>
     </article>`;
+}
+
+function inspectorStatus(service) {
+  if (service.status === "running") return tr("运行中", "Running");
+  if (service.status === "conflict") return tr("端口冲突", "Port conflict");
+  return tr("已离线", "Offline");
+}
+
+function inspectorHealth(service) {
+  if (service.status !== "running") return tr("未运行", "Not running");
+  if (service.health?.status === "healthy") return Number.isFinite(service.health.latencyMs) ? `${service.health.latencyMs}ms` : tr("正常", "Healthy");
+  if (service.health?.status === "unhealthy") return tr("检查异常", "Unhealthy");
+  if (service.health?.status === "disabled") return tr("已关闭", "Disabled");
+  return tr("未检查", "Not checked");
+}
+
+function renderInspector() {
+  if (!elements.inspector) return;
+  const service = findService(state.inspectedServiceId);
+  if (!service) {
+    elements.inspector.innerHTML = `<div class="inspector-empty"><span class="inspector-empty-icon">⌘</span><strong>${tr("选择一个服务查看详情", "Select a service to view details")}</strong><p>${tr("端口、健康状态、进程和快捷操作会显示在这里。", "Port, health, process details, and quick actions appear here.")}</p></div>`;
+    return;
+  }
+  const port = service.port || service.preferredPort || tr("未设置", "Not set");
+  const command = service.command || service.startCommand || tr("尚未记录启动命令", "No start command recorded");
+  const logs = state.inspectorLogs.get(service.id);
+  const logText = logs == null
+    ? tr("正在读取最近日志…", "Loading recent logs…")
+    : logs || tr("暂无由 PortDeck 启动的日志。", "No logs from a PortDeck-started process yet.");
+  const source = service.source === "managed" ? tr("受管服务", "Managed") : tr("自动发现", "Discovered");
+  elements.inspector.innerHTML = `
+    <div class="inspector-head"><strong>${tr("服务详情", "Service details")}</strong><span>${tr("已选择", "Selected")}</span></div>
+    <h2 class="inspector-title">${escapeHtml(service.name)}</h2>
+    <span class="inspector-url">${escapeHtml(service.url || `http://127.0.0.1:${port}`)}</span>
+    <div class="inspector-actions">${actionButtons(service, { expanded: true })}</div>
+    <section class="inspector-group">
+      <label>${tr("运行信息", "Runtime")}</label>
+      <div class="inspector-grid">
+        <div><small>${tr("状态", "Status")}</small><strong>${escapeHtml(inspectorStatus(service))}</strong></div>
+        <div><small>${tr("健康", "Health")}</small><strong>${escapeHtml(inspectorHealth(service))}</strong></div>
+        <div><small>${tr("进程", "Process")}</small><strong>${service.pid ? `PID ${escapeHtml(service.pid)}` : tr("未运行", "Not running")}</strong></div>
+        <div><small>${tr("类型", "Type")}</small><strong>${escapeHtml(service.kind || service.processName || source)}</strong></div>
+        <div><small>${tr("端口", "Port")}</small><strong class="mono">:${escapeHtml(port)}</strong></div>
+        <div><small>${tr("来源", "Source")}</small><strong>${escapeHtml(source)}</strong></div>
+      </div>
+    </section>
+    <section class="inspector-group"><label>${tr("启动命令", "Start command")}</label><div class="inspector-command">${escapeHtml(command)}</div></section>
+    <section class="inspector-group"><label>${tr("最近日志", "Recent logs")}</label><pre class="inspector-log">${escapeHtml(logText)}</pre></section>`;
+  translateTree(elements.inspector, state.preferences?.locale || "zh-CN");
+}
+
+async function loadInspectorLogs(serviceId) {
+  if (!serviceId || state.inspectorLogs.has(serviceId) || state.inspectorLogLoading.has(serviceId)) return;
+  const service = findService(serviceId);
+  if (!service || service.source !== "managed") {
+    state.inspectorLogs.set(serviceId, "");
+    if (state.inspectedServiceId === serviceId) renderInspector();
+    return;
+  }
+  state.inspectorLogLoading.add(serviceId);
+  try {
+    const { logs } = await api(`/api/services/${encodeURIComponent(serviceId)}/logs`);
+    state.inspectorLogs.set(serviceId, logs || "");
+  } catch {
+    state.inspectorLogs.set(serviceId, tr("暂时无法读取日志。", "Logs are temporarily unavailable."));
+  } finally {
+    state.inspectorLogLoading.delete(serviceId);
+    if (state.inspectedServiceId === serviceId) renderInspector();
+  }
+}
+
+function inspectService(serviceId) {
+  if (!findService(serviceId)) return;
+  state.inspectedServiceId = serviceId;
+  render();
+  loadInspectorLogs(serviceId);
 }
 
 function render() {
   renderMetrics();
   elements.sectionTitle.textContent = FILTER_LABELS[state.filter];
   const services = filteredServices();
+  if (!findService(state.inspectedServiceId) && services.length) {
+    state.inspectedServiceId = services[0].id;
+    loadInspectorLogs(state.inspectedServiceId);
+  }
   elements.bulkBar.hidden = state.selected.size === 0;
   elements.selectedCount.textContent = state.selected.size;
+  renderInspector();
 
   if (state.loading) {
     elements.list.innerHTML = '<div class="loading-row"><span></span><span></span><span></span></div>';
@@ -687,6 +786,7 @@ async function performAction(service, action) {
     const verb = action === "start" ? tr("启动", "Start") : action === "stop" ? tr("停止", "Stop") : tr("重启", "Restart");
     const confirmed = await confirmRisk(risk, isEnglish() ? `${verb} “${service.name}”` : `${verb}「${service.name}」`);
     if (!confirmed) return;
+    state.inspectorLogs.delete(service.id);
   }
 
   state.acting.add(service.id);
@@ -908,6 +1008,25 @@ elements.list.addEventListener("click", (event) => {
     render();
     return;
   }
+  const button = event.target.closest("[data-action]");
+  if (button) {
+    const service = findService(button.dataset.id);
+    if (service) performAction(service, button.dataset.action).catch((error) => toast(error.message, "error"));
+    return;
+  }
+  const row = event.target.closest("[data-inspect-id]");
+  if (row) inspectService(row.dataset.inspectId);
+});
+
+elements.list.addEventListener("keydown", (event) => {
+  if (!["Enter", " "].includes(event.key)) return;
+  const row = event.target.closest("[data-inspect-id]");
+  if (!row || event.target.matches("input, button")) return;
+  event.preventDefault();
+  inspectService(row.dataset.inspectId);
+});
+
+elements.inspector?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const service = findService(button.dataset.id);

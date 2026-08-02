@@ -50,7 +50,7 @@ npm run desktop:verify -- release/mac-universal/PortDeck.app
 - `APPLE_APP_SPECIFIC_PASSWORD`
 - `APPLE_TEAM_ID`
 
-推送 `v2.0.0` 标签后，工作流会测试并构建 ARM64、x64 和 universal 安装包，检查每种架构的体积预算，并在签名、公证成功后创建 GitHub Release。Universal 构建生成 `latest-mac.yml`，供用户确认式自动更新使用。请在推送标签前确认所有 Secrets 已配置，并准备 `docs/releases/v2.0.0.md` 中文发布说明。
+推送 `v2.1.0` 标签后，工作流会测试并构建 ARM64、x64 和 universal 安装包，检查每种架构的体积预算，并在签名、公证成功后创建 GitHub Release。Universal 构建生成 `latest-mac.yml`，供用户确认式自动更新使用。请在推送标签前确认所有 Secrets 已配置，并准备 `docs/releases/v2.1.0.md` 中文发布说明。
 
 流水线还会执行生产依赖漏洞审计、生成 CycloneDX SBOM，并随 Release 上传安装包、更新元数据和校验相关产物。发布前再运行：
 
